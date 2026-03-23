@@ -55,7 +55,7 @@ const translations: Record<Language, Record<string, string>> = {
     "hero.subtitle": "Notes on building quality products",
     "posts.label": "posts",
     "footer.copyright": "dev.log © 2025",
-    "footer.built": "Powered by next.js",
+    "footer.built": "Built with next.js",
   },
 };
 
