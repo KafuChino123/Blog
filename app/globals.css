@@ -1,5 +1,5 @@
-@import 'tailwindcss';
-@import 'tw-animate-css';
+@import "tailwindcss";
+@import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -84,8 +84,8 @@
 }
 
 @theme inline {
-  --font-sans: 'Geist', 'Geist Fallback';
-  --font-mono: 'Geist Mono', 'Geist Mono Fallback';
+  --font-sans: "Geist", "Geist Fallback";
+  --font-mono: "Geist Mono", "Geist Mono Fallback";
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -136,4 +136,224 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* ─── Blog prose typography ─── */
+
+.prose-blog {
+  color: var(--foreground);
+  font-size: 1.0625rem;
+  line-height: 1.8;
+}
+
+.prose-blog > *:first-child {
+  margin-top: 0;
+}
+
+/* Headings */
+.prose-blog h2,
+.prose-blog h3,
+.prose-blog h4 {
+  scroll-margin-top: 6rem;
+}
+
+.prose-blog h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+  line-height: 1.35;
+  color: var(--foreground);
+}
+
+.prose-blog h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+  color: var(--foreground);
+}
+
+.prose-blog h4 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--foreground);
+}
+
+/* Paragraphs */
+.prose-blog p {
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+}
+
+/* Links */
+.prose-blog a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklch, var(--accent) 40%, transparent);
+  transition: text-decoration-color 0.15s;
+}
+
+.prose-blog a:hover {
+  text-decoration-color: var(--accent);
+}
+
+/* Lists */
+.prose-blog ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.prose-blog ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.prose-blog li {
+  margin-bottom: 0.375rem;
+}
+
+.prose-blog li > ul,
+.prose-blog li > ol {
+  margin-top: 0.375rem;
+  margin-bottom: 0;
+}
+
+/* Strong & emphasis */
+.prose-blog strong {
+  font-weight: 650;
+  color: var(--foreground);
+}
+
+.prose-blog em {
+  font-style: italic;
+}
+
+/* Blockquotes */
+.prose-blog blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 0.75rem 1.25rem;
+  margin: 1.5rem 0;
+  background: color-mix(in oklch, var(--accent) 5%, var(--background));
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+
+.prose-blog blockquote p {
+  margin-bottom: 0;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+/* Inline code */
+.inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.15em 0.4em;
+  border-radius: 0.25rem;
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+/* Code blocks */
+.code-block {
+  position: relative;
+  margin: 1.5rem 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.code-block .code-lang {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--secondary);
+  user-select: none;
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  background: color-mix(in oklch, var(--secondary) 50%, var(--background));
+}
+
+.code-block code {
+  font-family: inherit;
+}
+
+/* sugar-high token colors — light mode */
+:root {
+  --sh-class: oklch(0.55 0.15 210);
+  --sh-identifier: oklch(0.35 0 0);
+  --sh-sign: oklch(0.5 0 0);
+  --sh-property: oklch(0.5 0.12 260);
+  --sh-entity: oklch(0.55 0.15 150);
+  --sh-jsxliterals: oklch(0.55 0.12 50);
+  --sh-string: oklch(0.5 0.14 150);
+  --sh-keyword: oklch(0.5 0.18 310);
+  --sh-comment: oklch(0.55 0 0);
+}
+
+.dark {
+  --sh-class: oklch(0.75 0.12 210);
+  --sh-identifier: oklch(0.85 0 0);
+  --sh-sign: oklch(0.65 0 0);
+  --sh-property: oklch(0.75 0.1 260);
+  --sh-entity: oklch(0.75 0.12 150);
+  --sh-jsxliterals: oklch(0.75 0.1 50);
+  --sh-string: oklch(0.72 0.12 150);
+  --sh-keyword: oklch(0.75 0.14 310);
+  --sh-comment: oklch(0.5 0 0);
+}
+
+/* Tables */
+.prose-blog table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.9375rem;
+}
+
+.prose-blog thead th {
+  text-align: left;
+  font-weight: 600;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 2px solid var(--border);
+  color: var(--foreground);
+}
+
+.prose-blog tbody td {
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.prose-blog tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Horizontal rules */
+.prose-blog hr {
+  border: none;
+  border-top: 1px solid var(--divider);
+  margin: 2.5rem 0;
+}
+
+/* Images */
+.prose-blog img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 1.5rem 0;
 }

@@ -1,8 +1,9 @@
 'use client'
 
 import { Header } from '@/components/header'
+import { Footer } from '@/components/footer'
 import { PostCard } from '@/components/post-card'
-import { posts } from '@/lib/posts'
+import { getPublishedPosts } from '@/lib/posts'
 import { useLanguage } from '@/components/providers'
 
 export default function Home() {
@@ -39,7 +40,7 @@ export default function Home() {
           </div>
           
           <div className="space-y-3">
-            {posts.map((post) => (
+            {getPublishedPosts().map((post) => (
               <PostCard key={post.id} post={post} />
             ))}
           </div>
@@ -50,13 +51,7 @@ export default function Home() {
         </section>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-divider mt-16 py-6">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 flex items-center justify-between text-xs font-mono text-muted-foreground">
-          <span>{t('footer.copyright')}</span>
-          <span className="text-muted-foreground/60">// {t('footer.built')}</span>
-        </div>
-      </footer>
+      <Footer />
     </div>
   )
 }

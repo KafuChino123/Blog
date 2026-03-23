@@ -9,7 +9,7 @@ export function PostCard({ post }: PostCardProps) {
   return (
     <article className="group relative">
       <Link 
-        href={`/post/${post.slug}`} 
+        href={`/blog/${post.slug}`}
         className="block py-4 px-4 -mx-4 rounded-md transition-colors hover:bg-secondary/50"
       >
         <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-4">
@@ -33,7 +33,6 @@ export function PostCard({ post }: PostCardProps) {
               {post.tags.slice(0, 3).map((tag) => (
                 <span key={tag} className="lowercase">#{tag}</span>
               ))}
-              <span className="ml-auto">{post.readingTime}</span>
             </div>
           </div>
         </div>
