@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useLanguage } from "@/components/providers";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Header } from "@/components/header";
@@ -12,6 +13,7 @@ export default function PostPage() {
   const params = useParams();
   const slug = params.slug as string;
   const post = getPostBySlug(slug);
+  const { language } = useLanguage();
 
   if (!post) {
     return (
@@ -55,7 +57,9 @@ export default function PostPage() {
             </div>
 
             <div className="flex items-center gap-4 text-sm text-muted-foreground pt-2">
-              <time dateTime={post.date}>{formatDate(post.date)}</time>
+              <time dateTime={post.date}>
+                {formatDate(post.date, language).year} {formatDate(post.date, language).monthDay}
+              </time>
               <span>·</span>
               <span>{post.readingTime}</span>
             </div>

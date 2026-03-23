@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useLanguage } from "@/components/providers";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
@@ -71,6 +72,7 @@ export default function BlogPostPage() {
   const slug = params.slug as string;
   const post = getPostBySlug(slug);
   const [tocOpen, setTocOpen] = useState(false);
+  const { language } = useLanguage();
 
   const toc = useMemo(() => (post ? extractToc(post.content) : []), [post]);
 
@@ -136,7 +138,7 @@ export default function BlogPostPage() {
               </div>
 
               <time dateTime={post.date} className="text-sm text-muted-foreground pt-2 block">
-                {formatDate(post.date)}
+                {formatDate(post.date, language).year} {formatDate(post.date, language).monthDay}
               </time>
             </div>
           </header>

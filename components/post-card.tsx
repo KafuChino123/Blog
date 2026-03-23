@@ -1,24 +1,30 @@
+"use client";
+
 import Link from 'next/link'
 import { Post, formatDate } from '@/lib/posts'
+import { useLanguage } from '@/components/providers'
 
 interface PostCardProps {
   post: Post
 }
 
 export function PostCard({ post }: PostCardProps) {
+  const { language } = useLanguage();
   return (
     <article className="group relative">
       <Link 
         href={`/blog/${post.slug}`}
         className="block py-4 px-4 -mx-4 rounded-md transition-colors hover:bg-secondary/50"
       >
-        <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-2">
           {/* Date */}
-          <time 
-            dateTime={post.date} 
-            className="text-xs font-mono text-muted-foreground shrink-0 tabular-nums"
+          <time
+            dateTime={post.date}
+            className="text-xs font-mono text-muted-foreground shrink-0 tabular-nums leading-tight sm:w-24"
           >
-            {formatDate(post.date)}
+            <span className="inline sm:block">{formatDate(post.date, language).year}</span>
+            <span className="inline sm:hidden">{" "}</span>
+            <span className="inline sm:block">{formatDate(post.date, language).monthDay}</span>
           </time>
           
           {/* Content */}

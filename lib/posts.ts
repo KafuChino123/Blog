@@ -739,13 +739,12 @@ export function getPublishedPosts(): Post[] {
   return posts.filter((post) => post.publish);
 }
 
-export function formatDate(dateStr: string): string {
+export function formatDate(dateStr: string, language: "zh" | "en" = "zh"): { year: string; monthDay: string } {
   const date = new Date(dateStr);
-  return date.toLocaleDateString("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const locale = language === "zh" ? "zh-CN" : "en-US";
+  const year = date.toLocaleDateString(locale, { year: "numeric" });
+  const monthDay = date.toLocaleDateString(locale, { month: "long", day: "numeric" });
+  return { year, monthDay };
 }
 
 export const allTags = Array.from(new Set(posts.flatMap((p) => p.tags)));
