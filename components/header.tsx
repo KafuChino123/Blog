@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useTheme, useLanguage, SITE_NAME } from "@/components/providers";
+import { useTheme, useLanguage } from "@/components/providers";
+import { getLanguageToggleLabel } from "@/lib/i18n";
+import { SITE_NAME } from "@/lib/site";
 
 export function Header() {
   const { theme, toggleTheme } = useTheme();
-  const { language, toggleLanguage } = useLanguage();
+  const { language, toggleLanguage, t } = useLanguage();
 
   return (
     <header className="border-b border-divider sticky top-0 bg-background/95 backdrop-blur-sm z-40">
@@ -25,16 +27,16 @@ export function Header() {
           <button
             onClick={toggleLanguage}
             className="px-2 py-1.5 rounded-md text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            aria-label="Toggle language"
+            aria-label={t("header.toggleLanguage")}
           >
-            {language === "zh" ? "EN" : "中"}
+            {getLanguageToggleLabel(language)}
           </button>
 
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
             className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            aria-label="Toggle theme"
+            aria-label={t("header.toggleTheme")}
           >
             {theme === "light" ? (
               <svg

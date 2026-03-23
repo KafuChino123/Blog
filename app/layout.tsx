@@ -14,14 +14,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Dev.log — 开发者博客",
-  description: "分享关于 Web 开发、设计系统与前沿技术的深度思考",
+  title: "Raspberry's Blog",
+  description: "things i build, learn, and think about",
   generator: "v0.app",
-  keywords: ["博客", "Next.js", "React", "前端开发", "TypeScript"],
-  authors: [{ name: "Dev.log" }],
+  keywords: ["博客", "Blog", "Next.js", "React", "前端开发", "TypeScript"],
+  authors: [{ name: "Raspberry" }],
   openGraph: {
-    title: "Dev.log — 开发者博客",
-    description: "分享关于 Web 开发、设计系统与前沿技术的深度思考",
+    title: "Raspberry's Blog",
+    description: "things i build, learn, and think about",
     type: "website",
   },
 };
@@ -33,9 +33,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground`}
-      >
+      <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground`}>
         <Providers>{children}</Providers>
         <Analytics />
       </body>

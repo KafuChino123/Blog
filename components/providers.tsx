@@ -7,9 +7,12 @@ import {
   useEffect,
   ReactNode,
 } from "react";
-
-// Site name
-export const SITE_NAME = "blog.r7y";
+import {
+  type Language,
+  type TranslationKey,
+  getNextLanguage,
+  translate,
+} from "@/lib/i18n";
 
 // Theme Context
 type Theme = "light" | "dark";
@@ -29,13 +32,13 @@ export function useTheme() {
   return context;
 }
 
-// Language Context
-type Language = "zh" | "en";
-
 interface LanguageContextType {
   language: Language;
   toggleLanguage: () => void;
-  t: (key: string) => string;
+  t: (
+    key: TranslationKey,
+    values?: Record<string, string | number>,
+  ) => string;
 }
 
 const LanguageContext = createContext<LanguageContextType | undefined>(
@@ -48,41 +51,6 @@ export function useLanguage() {
     throw new Error("useLanguage must be used within a LanguageProvider");
   }
   return context;
-}
-
-// Site start date for running days calculation
-const SITE_START_DATE = new Date("2024-02-20");
-
-function getRunningDays(): number {
-  const now = new Date();
-  return Math.floor(
-    (now.getTime() - SITE_START_DATE.getTime()) / (1000 * 60 * 60 * 24),
-  );
-}
-
-// Translations
-function getTranslations(): Record<Language, Record<string, string>> {
-  const days = getRunningDays();
-  return {
-    zh: {
-      "hero.comment": "notes on everything",
-      "hero.title": "Raspberry 的博客",
-      "hero.subtitle": "things i build, learn, and think about",
-      "tags.label": "tags",
-      "posts.label": "posts",
-      "footer.copyright": `${SITE_NAME} © ${new Date().getFullYear()}`,
-      "footer.built": `已运行 ${days} 天`,
-    },
-    en: {
-      "hero.comment": "notes on everything",
-      "hero.title": "Raspberry's Blog",
-      "hero.subtitle": "things i build, learn, and think about",
-      "tags.label": "tags",
-      "posts.label": "posts",
-      "footer.copyright": `${SITE_NAME} © ${new Date().getFullYear()}`,
-      "footer.built": `Already running ${days} days`,
-    },
-  };
 }
 
 // Combined Provider
@@ -114,13 +82,16 @@ export function Providers({ children }: { children: ReactNode }) {
   };
 
   const toggleLanguage = () => {
-    const newLanguage = language === "zh" ? "en" : "zh";
+    const newLanguage = getNextLanguage(language);
     setLanguage(newLanguage);
     localStorage.setItem("language", newLanguage);
   };
 
-  const t = (key: string) => {
-    return getTranslations()[language][key] || key;
+  const t = (
+    key: TranslationKey,
+    values?: Record<string, string | number>,
+  ) => {
+    return translate(language, key, values);
   };
 
   // Prevent hydration mismatch
@@ -131,7 +102,7 @@ export function Providers({ children }: { children: ReactNode }) {
           value={{
             language: "zh",
             toggleLanguage: () => {},
-            t: (key) => getTranslations().zh[key] || key,
+            t: (key, values) => translate("zh", key, values),
           }}
         >
           {children}
