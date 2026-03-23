@@ -41,7 +41,13 @@ function slugify(text: string): string {
     .replace(/[^\w\u4e00-\u9fff-]/g, "");
 }
 
-function CodeBlock({ children, className }: { children: string; className?: string }) {
+function CodeBlock({
+  children,
+  className,
+}: {
+  children: string;
+  className?: string;
+}) {
   const language = className?.replace("language-", "") ?? "";
   const html = highlight(children.trimEnd());
 
@@ -55,11 +61,23 @@ function CodeBlock({ children, className }: { children: string; className?: stri
   );
 }
 
-function TableOfContents({ items, onItemClick }: { items: TocItem[]; onItemClick?: () => void }) {
+function TableOfContents({
+  items,
+  onItemClick,
+}: {
+  items: TocItem[];
+  onItemClick?: () => void;
+}) {
   return (
     <nav className="space-y-1">
       {items.map((item) => (
-        <a key={item.id} href={`#${item.id}`} onClick={onItemClick} className="block text-sm text-muted-foreground hover:text-foreground transition-colors leading-relaxed" style={{ paddingLeft: `${(item.level - 2) * 0.75}rem` }}>
+        <a
+          key={item.id}
+          href={`#${item.id}`}
+          onClick={onItemClick}
+          className="block text-sm text-muted-foreground hover:text-foreground transition-colors leading-relaxed"
+          style={{ paddingLeft: `${(item.level - 2) * 0.75}rem` }}
+        >
           {item.text}
         </a>
       ))}
@@ -84,7 +102,10 @@ export default function BlogPostPage() {
           <div className="text-center space-y-4">
             <h1 className="text-2xl font-bold text-foreground">文章未找到</h1>
             <p className="text-muted-foreground">抱歉，您访问的文章不存在。</p>
-            <Link href="/" className="inline-block px-4 py-2 bg-foreground text-background rounded-md hover:opacity-90 transition-opacity">
+            <Link
+              href="/"
+              className="inline-block px-4 py-2 bg-foreground text-background rounded-md hover:opacity-90 transition-opacity"
+            >
               返回首页
             </Link>
           </div>
@@ -93,7 +114,14 @@ export default function BlogPostPage() {
     );
   }
 
-  const relatedPosts = posts.filter((p) => p.id !== post.id && p.publish && p.tags.some((tag) => post.tags.includes(tag))).slice(0, 3);
+  const relatedPosts = posts
+    .filter(
+      (p) =>
+        p.id !== post.id &&
+        p.publish &&
+        p.tags.some((tag) => post.tags.includes(tag)),
+    )
+    .slice(0, 3);
 
   const headingRenderer = (level: number) => {
     const Heading = `h${level}` as "h2" | "h3" | "h4";
@@ -113,7 +141,9 @@ export default function BlogPostPage() {
         {toc.length > 0 && (
           <aside className="hidden lg:block lg:w-56 shrink-0">
             <div className="sticky top-24">
-              <p className="text-xs font-mono text-muted-foreground mb-3 uppercase tracking-wider">目录</p>
+              <p className="text-xs font-mono text-muted-foreground mb-3 uppercase tracking-wider">
+                目录
+              </p>
               <TableOfContents items={toc} />
             </div>
           </aside>
@@ -123,13 +153,20 @@ export default function BlogPostPage() {
         <article className="min-w-0 max-w-3xl w-full">
           {/* Article Header */}
           <header className="mb-12 space-y-6 border-b border-divider pb-8">
-            <Link href="/" className="inline-flex items-center text-sm text-accent hover:text-foreground transition-colors group">
-              <span className="group-hover:-translate-x-1 transition-transform">←</span>
+            <Link
+              href="/"
+              className="inline-flex items-center text-sm text-accent hover:text-foreground transition-colors group"
+            >
+              <span className="group-hover:-translate-x-1 transition-transform">
+                ←
+              </span>
               <span className="ml-2">返回文章列表</span>
             </Link>
 
             <div className="space-y-4">
-              <h1 className="text-3xl sm:text-4xl font-bold text-foreground leading-tight text-balance">{post.title}</h1>
+              <h1 className="text-3xl sm:text-4xl font-bold text-foreground leading-tight text-balance">
+                {post.title}
+              </h1>
 
               <div className="flex flex-wrap gap-2">
                 {post.tags.map((tag) => (
@@ -137,8 +174,12 @@ export default function BlogPostPage() {
                 ))}
               </div>
 
-              <time dateTime={post.date} className="text-sm text-muted-foreground pt-2 block">
-                {formatDate(post.date, language).year} {formatDate(post.date, language).monthDay}
+              <time
+                dateTime={post.date}
+                className="text-sm text-muted-foreground pt-2 block"
+              >
+                {formatDate(post.date, language).year}{" "}
+                {formatDate(post.date, language).monthDay}
               </time>
             </div>
           </header>
@@ -160,11 +201,24 @@ export default function BlogPostPage() {
                       </code>
                     );
                   }
-                  return <CodeBlock className={className}>{String(children)}</CodeBlock>;
+                  return (
+                    <CodeBlock className={className}>
+                      {String(children)}
+                    </CodeBlock>
+                  );
                 },
                 a({ children, href, ...props }) {
                   return (
-                    <a href={href} target={href?.startsWith("http") ? "_blank" : undefined} rel={href?.startsWith("http") ? "noopener noreferrer" : undefined} {...props}>
+                    <a
+                      href={href}
+                      target={href?.startsWith("http") ? "_blank" : undefined}
+                      rel={
+                        href?.startsWith("http")
+                          ? "noopener noreferrer"
+                          : undefined
+                      }
+                      {...props}
+                    >
                       {children}
                     </a>
                   );
@@ -181,10 +235,18 @@ export default function BlogPostPage() {
               <h2 className="text-2xl font-bold text-foreground">相关文章</h2>
               <div className="space-y-4">
                 {relatedPosts.map((relatedPost) => (
-                  <Link key={relatedPost.id} href={`/blog/${relatedPost.slug}`} className="block group">
+                  <Link
+                    key={relatedPost.id}
+                    href={`/blog/${relatedPost.slug}`}
+                    className="block group"
+                  >
                     <div className="border border-border rounded-md p-4 group-hover:bg-post-hover group-hover:border-accent transition-all duration-300">
-                      <h3 className="font-semibold text-foreground group-hover:text-accent transition-colors mb-1">{relatedPost.title}</h3>
-                      <p className="text-sm text-muted-foreground line-clamp-2">{relatedPost.excerpt}</p>
+                      <h3 className="font-semibold text-foreground group-hover:text-accent transition-colors mb-1">
+                        {relatedPost.title}
+                      </h3>
+                      <p className="text-sm text-muted-foreground line-clamp-2">
+                        {relatedPost.excerpt}
+                      </p>
                     </div>
                   </Link>
                 ))}
@@ -196,7 +258,11 @@ export default function BlogPostPage() {
 
       {/* Mobile TOC toggle button */}
       {toc.length > 0 && (
-        <button onClick={() => setTocOpen(!tocOpen)} className="lg:hidden fixed bottom-6 right-6 z-50 w-11 h-11 rounded-full bg-foreground text-background flex items-center justify-center shadow-lg hover:opacity-90 transition-opacity" aria-label="切换目录">
+        <button
+          onClick={() => setTocOpen(!tocOpen)}
+          className="lg:hidden fixed bottom-6 right-6 z-50 w-11 h-11 rounded-full bg-foreground text-background flex items-center justify-center shadow-lg hover:opacity-90 transition-opacity"
+          aria-label="切换目录"
+        >
           {tocOpen ? <X size={18} /> : <List size={18} />}
         </button>
       )}
@@ -204,10 +270,18 @@ export default function BlogPostPage() {
       {/* Mobile TOC overlay */}
       {toc.length > 0 && tocOpen && (
         <>
-          <div className="lg:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setTocOpen(false)} />
+          <div
+            className="lg:hidden fixed inset-0 z-40 bg-black/40"
+            onClick={() => setTocOpen(false)}
+          />
           <div className="lg:hidden fixed bottom-20 right-6 z-50 w-64 max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-background p-4 shadow-xl">
-            <p className="text-xs font-mono text-muted-foreground mb-3 uppercase tracking-wider">目录</p>
-            <TableOfContents items={toc} onItemClick={() => setTocOpen(false)} />
+            <p className="text-xs font-mono text-muted-foreground mb-3 uppercase tracking-wider">
+              目录
+            </p>
+            <TableOfContents
+              items={toc}
+              onItemClick={() => setTocOpen(false)}
+            />
           </div>
         </>
       )}

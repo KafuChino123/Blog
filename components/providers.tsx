@@ -1,6 +1,12 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+} from "react";
 
 // Site name
 export const SITE_NAME = "blog.r7y";
@@ -32,7 +38,9 @@ interface LanguageContextType {
   t: (key: string) => string;
 }
 
-const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
+const LanguageContext = createContext<LanguageContextType | undefined>(
+  undefined,
+);
 
 export function useLanguage() {
   const context = useContext(LanguageContext);
@@ -47,7 +55,9 @@ const SITE_START_DATE = new Date("2024-02-20");
 
 function getRunningDays(): number {
   const now = new Date();
-  return Math.floor((now.getTime() - SITE_START_DATE.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.floor(
+    (now.getTime() - SITE_START_DATE.getTime()) / (1000 * 60 * 60 * 24),
+  );
 }
 
 // Translations
@@ -58,6 +68,7 @@ function getTranslations(): Record<Language, Record<string, string>> {
       "hero.comment": "notes on everything",
       "hero.title": "Raspberry 的博客",
       "hero.subtitle": "things i build, learn, and think about",
+      "tags.label": "tags",
       "posts.label": "posts",
       "footer.copyright": `${SITE_NAME} © ${new Date().getFullYear()}`,
       "footer.built": `已运行 ${days} 天`,
@@ -66,6 +77,7 @@ function getTranslations(): Record<Language, Record<string, string>> {
       "hero.comment": "notes on everything",
       "hero.title": "Raspberry's Blog",
       "hero.subtitle": "things i build, learn, and think about",
+      "tags.label": "tags",
       "posts.label": "posts",
       "footer.copyright": `${SITE_NAME} © ${new Date().getFullYear()}`,
       "footer.built": `Already running ${days} days`,
@@ -115,14 +127,24 @@ export function Providers({ children }: { children: ReactNode }) {
   if (!mounted) {
     return (
       <ThemeContext.Provider value={{ theme: "light", toggleTheme: () => {} }}>
-        <LanguageContext.Provider value={{ language: "zh", toggleLanguage: () => {}, t: (key) => getTranslations().zh[key] || key }}>{children}</LanguageContext.Provider>
+        <LanguageContext.Provider
+          value={{
+            language: "zh",
+            toggleLanguage: () => {},
+            t: (key) => getTranslations().zh[key] || key,
+          }}
+        >
+          {children}
+        </LanguageContext.Provider>
       </ThemeContext.Provider>
     );
   }
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <LanguageContext.Provider value={{ language, toggleLanguage, t }}>{children}</LanguageContext.Provider>
+      <LanguageContext.Provider value={{ language, toggleLanguage, t }}>
+        {children}
+      </LanguageContext.Provider>
     </ThemeContext.Provider>
   );
 }
