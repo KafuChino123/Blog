@@ -42,25 +42,36 @@ export function useLanguage() {
   return context;
 }
 
+// Site start date for running days calculation
+const SITE_START_DATE = new Date("2024-02-20");
+
+function getRunningDays(): number {
+  const now = new Date();
+  return Math.floor((now.getTime() - SITE_START_DATE.getTime()) / (1000 * 60 * 60 * 24));
+}
+
 // Translations
-const translations: Record<Language, Record<string, string>> = {
-  zh: {
-    "hero.comment": "关于 Web 开发的笔记",
-    "hero.title": "关于 Web 开发、设计系统\n与前沿技术的深度思考",
-    "hero.subtitle": "构建高质量产品的实践笔记",
-    "posts.label": "posts",
-    "footer.copyright": `${SITE_NAME} © 2025`,
-    "footer.built": "使用 next.js 构建",
-  },
-  en: {
-    "hero.comment": "notes on building for the web",
-    "hero.title": "Thoughts on web development,\ndesign systems & modern tech",
-    "hero.subtitle": "Notes on building quality products",
-    "posts.label": "posts",
-    "footer.copyright": `${SITE_NAME} © 2025`,
-    "footer.built": "Built with next.js",
-  },
-};
+function getTranslations(): Record<Language, Record<string, string>> {
+  const days = getRunningDays();
+  return {
+    zh: {
+      "hero.comment": "notes on everything",
+      "hero.title": "Raspberry 的博客",
+      "hero.subtitle": "things i build, learn, and think about",
+      "posts.label": "posts",
+      "footer.copyright": `${SITE_NAME} © ${new Date().getFullYear()}`,
+      "footer.built": `已运行 ${days} 天`,
+    },
+    en: {
+      "hero.comment": "notes on everything",
+      "hero.title": "Raspberry's Blog",
+      "hero.subtitle": "things i build, learn, and think about",
+      "posts.label": "posts",
+      "footer.copyright": `${SITE_NAME} © ${new Date().getFullYear()}`,
+      "footer.built": `Already running ${days} days`,
+    },
+  };
+}
 
 // Combined Provider
 export function Providers({ children }: { children: ReactNode }) {
@@ -97,14 +108,14 @@ export function Providers({ children }: { children: ReactNode }) {
   };
 
   const t = (key: string) => {
-    return translations[language][key] || key;
+    return getTranslations()[language][key] || key;
   };
 
   // Prevent hydration mismatch
   if (!mounted) {
     return (
       <ThemeContext.Provider value={{ theme: "light", toggleTheme: () => {} }}>
-        <LanguageContext.Provider value={{ language: "zh", toggleLanguage: () => {}, t: (key) => translations.zh[key] || key }}>{children}</LanguageContext.Provider>
+        <LanguageContext.Provider value={{ language: "zh", toggleLanguage: () => {}, t: (key) => getTranslations().zh[key] || key }}>{children}</LanguageContext.Provider>
       </ThemeContext.Provider>
     );
   }
