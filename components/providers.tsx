@@ -2,6 +2,9 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 
+// Site name
+export const SITE_NAME = "blog.r7y";
+
 // Theme Context
 type Theme = "light" | "dark";
 
@@ -46,7 +49,7 @@ const translations: Record<Language, Record<string, string>> = {
     "hero.title": "关于 Web 开发、设计系统\n与前沿技术的深度思考",
     "hero.subtitle": "构建高质量产品的实践笔记",
     "posts.label": "posts",
-    "footer.copyright": "dev.log © 2025",
+    "footer.copyright": `${SITE_NAME} © 2025`,
     "footer.built": "使用 next.js 构建",
   },
   en: {
@@ -54,7 +57,7 @@ const translations: Record<Language, Record<string, string>> = {
     "hero.title": "Thoughts on web development,\ndesign systems & modern tech",
     "hero.subtitle": "Notes on building quality products",
     "posts.label": "posts",
-    "footer.copyright": "dev.log © 2025",
+    "footer.copyright": `${SITE_NAME} © 2025`,
     "footer.built": "Built with next.js",
   },
 };

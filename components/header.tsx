@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useTheme, useLanguage } from '@/components/providers'
+import { useTheme, useLanguage, SITE_NAME } from '@/components/providers'
 
 export function Header() {
   const { theme, toggleTheme } = useTheme()
@@ -13,7 +13,7 @@ export function Header() {
         <Link href="/" className="group inline-flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
             <span className="text-accent font-mono text-sm">$</span>
-            <span className="font-mono text-sm font-medium text-foreground">dev.log</span>
+            <span className="font-mono text-sm font-medium text-foreground">{SITE_NAME}</span>
             <span className="w-2 h-4 bg-accent/80 animate-pulse" />
           </div>
         </Link>
