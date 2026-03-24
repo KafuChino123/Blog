@@ -1,0 +1,286 @@
+#iOS #Objective-C 
+
+参考资料：
+https://www.cs.cornell.edu/~asampson/blog/llvm.html
+https://zhuanlan.zhihu.com/p/472813616
+https://www.cnblogs.com/luoganttcc/p/16603993.html
+
+https://blog.csdn.net/Airths/article/details/122172096
+https://juejin.cn/post/6984084367874195463
+https://juejin.cn/post/6844903506164498440
+https://lionjohn.gitbooks.io/ioscookbook/content/CHAPTER3/lldb.html
+https://link.juejin.cn/?target=http%3A%2F%2Flldb.llvm.org%2Ftutorial.html
+[与调试器共舞 - LLDB 的华尔兹](https://objccn.io/issue-19-2/)
+[LLDB Quick Start Guide - Apple Developer](https://developer.apple.com/library/archive/documentation/IDEs/Conceptual/gdb_to_lldb_transition_guide/document/Introduction.html)
+### 1. LLVM
+#### 1.1 什么是LLVM
+
+==**LLVM项目是模块化、可重用的编译器以及工具链技术的集合。**==
+
+它是一个编译器，确切的说是==一套框架+基于框架的一些编译器实现（如Clang）==，是当下很先进的一套编译系统。特别对于 C/C++/Objective-C 等语言而言，更是如此。
+
+当然，也不止于此，它也支持 [[#1.Extra.1 即时编译 JIT|JIT]]，以及很多非C家族语言。
+
+LLVM 之所以优秀，在于以下几点：
+
+- 1、LLVM 的[[#1.Extra.2 中间表达 IR|中间表达]]（IR）是可以dump出来成为可阅读的文本形式的（语法有点像汇编），看起来微不足道，但是其他很多编译器却只有内存中的数据结构，使得学习调试难度大增。
+- 2、==模块化的设计==比较好，这一方面是后发优势，吸收了很多前人经验，也和设计者的架构功力息息相关。
+- 3、虽然始于学术项目，但 LLVM 一直受到工业界的支持（ Apple)，所以不仅好用，而且开源可定制。避免了在 Java 中类似面临选择 HotSpot 和 Jikes 的困境。
+
+*Note*：
+- 美国计算机协会 (ACM) 将其2012 年软件系统奖项颁给了LLVM，之前曾经获得此奖项的软件和技术包括：Java、Apache、 Mosaic、the World Wide Web、Smalltalk、UNIX、Eclipse等等；
+- 创始人：==Chris Lattner，亦是Swift之父；==
+- 趣闻：Chris Latter本来只是想写一个底层的虚拟机，这也是LLVM名字的由来，==low level virtual machine==，跟Java的JVM虚拟机一样，可是后来，LLVM从来没有被用作过虚拟机，哪怕LLVM的名气已经传开了。所以人们决定仍然叫他LLVM，更多的时候只是当作“商标”一样的感觉在使用，其实它跟虚拟机没有半毛钱关系。官方描述如下：
+  **The name “LLVM” itself is not an acronym; it is the full name of the project. 
+  “LLVM”这个名称本身不是首字母缩略词; 它是项目的全名。**
+
+#### 1.2 为什么关注LLVM
+
+LLVM是很好，可如果不做编译器研究，了解它有什么用呢？
+
+了解编译器，可以帮助我们分析程序的行为，针对系统做程序的转译（transform）优化。诸如数据处理框架中，当使用高阶API甚至是SQL编写的程序，如何用编译的思路提升它们的运行效率等等。如果未来有可能从事下面的工作，提前了解LLVM对后续的学习会很有帮助：
+
+- [模拟器](https://link.zhihu.com/?target=http%3A//research.cs.wisc.edu/vertical/papers/2014/wddd-sim-harmful.pdf)
+- 类似于Pin的动态二进制检测工具
+- 源码级转换（从简单的东西`sed`到涉及 AST 解析和序列化的更完整的工具）
+- 破解内核以拦截系统调用
+- 任何类似于管理程序的东西
+
+有时候一项工作看起来并不完全是个完整的编译行为，但只要涉及到源码到源码的转换，了解LLVM通常会有所帮助。
+
+以下是一些使用 LLVM 完成并非所有编译操作的研究项目的示例：
+
+- [UIUC 的Virtual Ghost](https://link.zhihu.com/?target=http%3A//sva.cs.illinois.edu/pubs/VirtualGhost-ASPLOS-2014.pdf) 展示了您以使用编译器通道来保护进程免受受损操作系统内核的影响。
+- [UW 的CoreDet](https://link.zhihu.com/?target=http%3A//homes.cs.washington.edu/~djg/papers/asplos10-coredet.pdf) 使多线程程序具有确定性。
+- 在近似计算工作中，使用 LLVM pass 将错误注入程序以模拟容易出错的硬件。
+
+再次强调：LLVM 不只是用于实现新的编译器及编译优化！
+
+#### 1.3 基本架构
+##### 1.3.1 传统的编译器架构
+![](传统的编译器架构.png)
+- Frontend：前端，进行**词法分析、语法分析、语义分析以及生成中间代码**等工作；
+- Optimizer：优化器，负责**中间代码优化**；
+- Backend：后端，**生成机器码**。
+
+##### 1.3.2 LLVM编译器架构
+![](LLVM架构.jpg)
+对于LLVM的结构：
+- 不同的前端后端使用==统一的中间代码LLVM Intermediate Representation (LLVM IR)==；
+- 如果需要支持一种新的编程语言，那么只需要实现一个新的前端；
+- 如果需要支持一种新的硬件设备或者架构，那么只需要实现一个新的后端；
+- 优化阶段是一个**通用的阶段**，它针对的是统一的LLVM IR，不论是支持新的编程语言，还是- 支持新的硬件设备，**都不需要对优化阶段做修改**；
+- 相比之下，GCC的前端和后端没分得太开，前端后端耦合在了一起。所以GCC为了支持一门新的语言，或者为了支持一个新的目标平台，就变得特别困难；
+- **LLVM 现在被作为实现各种静态和运行时编译语言的通用基础结构**(GCC家族、Java、.NET、Python、Ruby、Scheme、Haskell、D等)。
+![](LLVM整体架构.jpg)
+
+##### 1.3.3 关于Clang
+
+Clang是**LLVM项目的一个子项目，基于LLVM架构的C/C++/Objective-C编译器前端**。
+
+相比于GCC，Clang具有如下优点：
+
+- **编译速度快**：在某些平台上，Clang的编译速度显著的快过GCC(Debug模式下编译OC速度比GGC快3倍)；
+- **占用内存小**：Clang生成的AST所占用的内存是GCC的五分之一左右；
+- **模块化设计**：Clang采用基于库的模块化设计，易于 IDE 集成及其他用途的重用；
+- **诊断信息可读性强**：在编译过程中，Clang 创建并保留了大量详细的元数据 (metadata)，有利于调试和错误报告；
+- 设计清晰简单，**容易理解**，易于扩展增强。
+#### 1.Extra.1 即时编译 JIT
+https://zhida.zhihu.com/search/3660499413131997058
+
+JIT是指==即时编译（Just-In-Time Compilation）==，它是一种==在程序运行期间动态地将源代码或字节码编译成机器码==的技术。
+
+具体来说，JIT编译器会在代码执行时进行分析，并将选定的代码片段编译成优化后的机器码，以便后续执行时直接运行这些编译后的代码，从而提高程序的执行效率。 
+
+JIT的优点包括： 
+- 能够根据运行时的具体情况（如硬件特性、输入数据等）进行优化，生成更高效的机器码；
+- 支持动态链接和运行时调整，使得程序可以更好地适应不同的运行环境；
+- 可以在编译过程中利用运行时数据，进行更精准的优化。 
+
+然而，JIT也有一些缺点：
+- 由于编译过程发生在运行时，会导致一定的启动延迟和运行时的性能开销；
+- 不适用于频繁启动和停用的场景，因为每次启动都需要重新编译；
+- 对于不常执行的代码，可能不会进行优化，从而影响整体性能。
+
+在LLVM的背景下，支持JIT意味着LLVM可以动态地将C/C++/Objective-C等语言的代码编译成适合当前运行环境的机器码，从而提高这些语言的执行效率。此外，LLVM的中间表达（IR）可以被dump为文本形式，这有助于开发者理解和调试代码。
+
+#### 1.Extra.2 中间表达 IR
+https://zhida.zhihu.com/search/3660499421050843162
+
+中间表达（IR, Intermediate Representation）是==指在编译过程中，源代码被转换成的一种语言无关的抽象表示形式==，用于进一步的优化和生成目标代码。
+
+在LLVM中，中间表达（IR）具体指的就是**一种可以被读写的文本形式**，其语法类似于汇编语言，这使得它既易于理解和调试，又能够作为多个高级语言的共同目标，**方便不同语言之间的转换和优化**。通过使用中间表达，LLVM能够实现高效的编译过程，并支持多种语言的编译需求。此外，==中间表达的模块化设计也使得LLVM具有良好的扩展性和灵活性==。
+
+### 2. LLDB
+#### 2.1 什么是LLDB
+
+==LLDB（Low Level Debugger）是新一代高性能调试器，其是一组可重用组件的集合==，这些组件大多是 LLVM 项目中的现有库，例如：Clang 表达式解析器，LLVM 反汇编程序，等等。
+
+LLDB 是 macOS 上 Xcode 中的默认调试器，**Xcode 主窗口底部的控制台便是开发者与 LLDB 交互的区域**。LLDB 允许开发者在程序运行的特定时刻暂停进程，查看变量的值，执行自定义的指令，控制代码的执行流程，等等。
+
+#### 2.2 LLDB 的本质
+
+上面说到 LLDB 已经被内置在 Xcode 中。它其实是作为一个**共享库**，存放在 Xcode 的
+`/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework`目录下的。
+
+也就是说，共享库` LLDB.framework`为 Xcode 提供了底层调试环境，LLDB 命令行工具会链接到此共享库并使用此共享库中的 API。
+
+LLDB 的 API 在共享库中是作为面向 C++ 的接口公开的。此外，LLDB 还通过 Python 脚本绑定公开了整个 API，该绑定允许在 LLDB 嵌入式脚本解释器中，以及任何导入 lldb.py 模块的标准 Python 文件中使用这些 API。共享的 LLDB API 不仅使 LLDB 可以用于调试，而且使 LLDB 可以用于符号化，反汇编，对象和符号文件自省，等等。
+
+#### 2.3 iOS LLDB调试
+https://link.juejin.cn/?target=http%3A%2F%2Flldb.llvm.org%2Ftutorial.html
+
+LLDB调试器很早就取代GDB，成为Xcode工程中默认的调试器。
+
+- **命令运行方法**: 必须先打断点—>然后才能在控制台中输入调试语句. 或者运行后点击暂停；
+- **命令补全**: 补全会在第三个字符被键入时自动弹出，或者通过Esc键手动弹出。
+
+关于 `~/.lldbinit` 文件：LLDB在启动时会读取` ~/.lldbinit` 文件。这个文件里存放LLDB启动时执行的脚本 `/alias` 等。
+##### 2.3.1 调试命令
+
+$0 $1 等表示当前运行的调试记录, 可直接使用值。（任何以美元符开头的东西都是存在于 LLDB 的命名空间的）
+
+LLDB 命令会作**前缀匹配**——如`print`命令，也可以使用 `prin`，`pri`，或者 `p`。但你不能使用 `pr`，因为 LLDB 不能消除和 `process` 的歧义。(很多命令的是简写或者别名)
+
+**help** 查看命令帮助（不传参数时显示所有命令, 可以具体查看莫伊参数的使用）：
+```
+help po
+help break command add         具体到查看add参数的帮助
+```
+
+**p**（print) 功能是输出原生类型（boolean、integer、float、etc）的信息：
+```
+p (int)[[[self view] subviews] count]
+p/x 16              print/<fmt>格式  这里表示将变量或值以16进制输出
+p/t 16              二进制输出(t表示two)
+p/c 16              打印字符串
+x/4c $str           x命名为查看内存. 这里查看4个字节
+```
+
+**po**（print object）功能是输出objective-c中对象（objects）的信息. (为e -o —的别名)：
+```
+po [self view]           输出当前view信息
+po [[[UIApplication sharedApplication] keyWindow] recursiveDescription]     打印当前的视图层级
+```
+
+**call** 同po或p一样，也是调用。当不需要显示输出时使用：
+```
+call [self.view setBackgroundColor:[UIColor redColor]]
+```
+
+**expr**（全称expression, 也简写为e）运行时修改变量值、指针等：
+```
+e NSString *$str = @"blog.xigulu.com" // 定义一个变量str
+e @import UIKit
+e cellItem.layer.borderWidth = 1
+e (void)[CATransaction flush] // 刷新界面(在刷新界面时调用, 因为程序已经暂停)
+```
+```
+e id $view = (id) 0x7fbd71432590
+e (void) [$view setBackgroundColor:[UIColor redColor]] // 改变view的背景颜色
+e (void)[CATransaction flush]
+```
+```
+e id $nvc = [[[UIApplication sharedApplication] keyWindow] rootViewController] // 拿到根NavigationController
+e id $vc = [UIViewController new] // 生成一个vc
+e (void)[[$vc view] setBackgroundColor:[UIColor yellowColor]]
+e (void)[$vc setTitle:@"Yay!"]
+e (void)[$nvc pushViewContoller:$vc animated:YES] // push
+caflush // e (void)[CATransaction flush] // 显示
+```
+
+**bt**（全称thread backtrace）打印调用堆栈，加all可打印所有thread的堆栈。程序出错时可使用这个命令。
+
+可以把断点放在函数的开头，然后用 `thread return` 命令重写函数的行为，然后继续：
+```
+thread backtrace all           // 查看所有线程调用栈
+thread list                    // 列出所有线程
+thread return <exp>            // 可用来控制程序流程, 伪造返回值
+```
+
+**frame variable** 获取全部变量值：
+```
+frame v self->testVar           // 也可以获取单个变量值
+frame info                      // 当前的行数和源码文件，以及其他一些信息
+```
+
+**image** 可用于寻址，有多个组合命令。常用于寻找栈地址对应的代码位置, 用于查错(能定位出错误代码行数)：
+```
+image lookup --address 0x0000000100004af8       // 最后为栈地址
+```
+
+**breakpoint**（或简写为b）设置断点。（可在运行过程中添加）：
+```
+breakpoint set -f XXX.m -l 28           // 第28行设置断点
+b ViewController.swift:28               // 第28行设置断点(xxx.m也一样)
+b 28                                    // 功能同上
+
+// 直接指定函数(符号断点:Xcode GUI中只要方法执行就触发断点, 这里只针对本类)
+b myfunc 
+
+b -[NSArray objectAtIndex:]                
+breakpoint list                         // 列出所有断点. 简写br li
+br dis 1                                // 禁用某个断点
+breakpoint delete 3                     // 删除3号断点
+```
+
+**断点调试命令**: `c` 即process continue，`n` 即step over下一步，`s`即step in，`thread step-out`即step out。（n，s比较常用）
+```
+n           // 下一步
+s           // 进入
+```
+
+**watchpoint**: 监听某个实例的变化。（等同于在Xcode调试变量窗口—>右键某个变量—>Watch x）
+
+**注意**: watchpoint是分类型的，包括read，write或者read_write类型。通过Xcode右键添加的只能是write类型。
+```
+watchpoint set self->testVar                 // 为该变量地址设置watchpoint
+watchpoint set v -w read_write _mybtn        // 为_mybtn变量设置read_write类型的监听
+watchpoint set expression 0x00007fb27b4969e0 // 为该内存地址设置watchpoint，内存地址可从前文提及的`p`命令获取
+watchpoint command add -o 'frame info' 1     // 为watchpoint 1号加上子命令 `frame info`
+watchpoint list                   // 列出所有watchpoint
+watchpoint delete                 // 删除所有watchpoint
+```
+
+**定义别名alias**：我们可以自由地创建LLDB命令的别名集合。LLDB在启动时会读取`~/.lldbinit`文件，这个文件中存储了command alias命令创建的别名：
+```
+command alias mycommand image lookup --address %1  // 定义mycommand别名
+```
+
+上面的就可以简化为`mycommand 0x0000000100004af8`进行调用：
+```
+breakpoint set --file foo.c --line 12
+command alias bfl breakpoint set -f %1 -l %2  // 用别名
+bfl foo.c 12           // 简化后的调用方式
+command unalias bfl    // 取消别名
+```
+
+**lldb中声明变量**：和PHP中变量一样
+```
+e int $a = 2  // 普通类型
+p $a * 19
+e NSArray *$array = @[ @"Saturday", @"Sunday", @"Monday" ] // 对象类型
+p [$array count]
+```
+
+##### 2.3.2 在终端中调试程序
+https://casatwy.com/shi-yong-lldbdiao-shi-cheng-xu.html
+http://www.cocoachina.com/ios/20150126/11021.html
+
+一般是在 Xcode 中进行调试，也可以在命令行中调试。步骤如下：
+**1.** 加载程序以备调试
+**2.** 将一个运行的程序绑定到LLDB
+**3.** 设置断点和观察点
+**4.** 控制程序的执行
+**5.** 在调试的程序中导航
+**6.** 检查状态和值的变量
+**7.** 执行替代代码
+
+```
+	// 启动调试. (或者直接`lldb`进入REPL交互界面)
+$ lldb /Users/xuneng/Desktop/MacApp/MacDown.app 
+
+	// 设置断点....    (这个只有app程序不好设置)
+$ run      // 启动程序
+$ q        // 退出lldb
+```
