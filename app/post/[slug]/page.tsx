@@ -1,4 +1,9 @@
 import { redirect } from "next/navigation";
+import { getAllPosts } from "@/lib/posts";
+
+export function generateStaticParams() {
+  return getAllPosts().map((post) => ({ slug: post.slug }));
+}
 
 interface PageProps {
   params: Promise<{

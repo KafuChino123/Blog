@@ -2,7 +2,9 @@ import { notFound } from "next/navigation";
 import { BlogPostView } from "@/components/blog-post-view";
 import { getAllPosts, getPostBySlug } from "@/lib/posts";
 
-export const dynamic = "force-dynamic";
+export function generateStaticParams() {
+  return getAllPosts().map((post) => ({ slug: post.slug }));
+}
 
 interface PageProps {
   params: Promise<{
