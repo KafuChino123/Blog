@@ -201,11 +201,15 @@ function readPostFile(filename: string): PostFileData {
 
   const title = extractTitle(content, slug);
   const excerpt = extractExcerpt(content) || title;
+  const titleEn = contentEn ? extractTitle(contentEn, slug) : undefined;
+  const excerptEn = contentEn ? (extractExcerpt(contentEn) || titleEn) : undefined;
 
   return {
     slug,
     title,
     excerpt,
+    titleEn,
+    excerptEn,
     date,
     tags: meta.tags,
     content,
@@ -220,6 +224,8 @@ function toPostSummary(post: PostFileData): PostSummary {
     slug: post.slug,
     title: post.title,
     excerpt: post.excerpt,
+    titleEn: post.titleEn,
+    excerptEn: post.excerptEn,
     date: post.date,
     tags: post.tags,
     hasTranslation: post.hasTranslation,

@@ -12,6 +12,9 @@ interface PostCardProps {
 export function PostCard({ post }: PostCardProps) {
   const { language } = useLanguage();
 
+  const title = language === "en" && post.titleEn ? post.titleEn : post.title;
+  const excerpt = language === "en" && post.excerptEn ? post.excerptEn : post.excerpt;
+
   return (
     <article className="group relative">
       <Link
@@ -34,10 +37,10 @@ export function PostCard({ post }: PostCardProps) {
 
           <div className="flex-1 min-w-0 space-y-1">
             <h2 className="text-foreground font-medium group-hover:text-accent transition-colors">
-              {post.title}
+              {title}
             </h2>
             <p className="text-sm text-muted-foreground line-clamp-1">
-              {post.excerpt}
+              {excerpt}
             </p>
             {post.tags.length > 0 && (
               <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground/70">

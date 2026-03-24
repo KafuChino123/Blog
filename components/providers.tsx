@@ -67,10 +67,15 @@ export function Providers({ children }: { children: ReactNode }) {
       setTheme(savedTheme);
       document.documentElement.classList.toggle("dark", savedTheme === "dark");
     }
-    // Load saved language
+    // Load saved language, or detect from browser
     const savedLanguage = localStorage.getItem("language") as Language | null;
     if (savedLanguage) {
       setLanguage(savedLanguage);
+    } else {
+      const browserLang = navigator.language || "";
+      if (!browserLang.startsWith("zh")) {
+        setLanguage("en");
+      }
     }
   }, []);
 
