@@ -266,8 +266,12 @@ export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
                 {relatedPosts.map((relatedPost) => (
                   <Link key={relatedPost.slug} href={getPostUrl(relatedPost.slug)} className="block group">
                     <div className="border border-border rounded-md p-4 group-hover:bg-post-hover group-hover:border-accent transition-all duration-300">
-                      <h3 className="font-semibold text-foreground group-hover:text-accent transition-colors mb-1">{relatedPost.title}</h3>
-                      <p className="text-sm text-muted-foreground line-clamp-2">{relatedPost.excerpt}</p>
+                      <h3 className="font-semibold text-foreground group-hover:text-accent transition-colors mb-1">
+                        {language === "en" && relatedPost.titleEn ? relatedPost.titleEn : relatedPost.title}
+                      </h3>
+                      <p className="text-sm text-muted-foreground line-clamp-2">
+                        {language === "en" && relatedPost.excerptEn ? relatedPost.excerptEn : relatedPost.excerpt}
+                      </p>
                     </div>
                   </Link>
                 ))}
