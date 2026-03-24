@@ -1,13 +1,13 @@
 # Hello World
 
-This is the first post in the new filesystem-backed content layer. If this file exists under `content/posts`, it is automatically listed on the homepage.
+这是新的基于文件系统内容层的第一篇文章。只要这个文件存在于 `content/posts` 目录下，它就会自动显示在首页上。
 
-## Why this setup
+## 为什么选择这种方案
 
-The filesystem is the single source of truth, so publishing is as simple as adding or removing an `.mdx` file.
+文件系统是唯一的数据源，发布文章就像添加或删除一个 `.mdx` 文件一样简单。
 
 ```tsx
 export function HelloWorld() {
-  return <p>Upload equals publish.</p>;
+  return <p>上传即发布。</p>;
 }
 ```

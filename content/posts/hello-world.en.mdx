@@ -1,0 +1,13 @@
+# Hello World
+
+This is the first post in the new filesystem-backed content layer. If this file exists under `content/posts`, it is automatically listed on the homepage.
+
+## Why this setup
+
+The filesystem is the single source of truth, so publishing is as simple as adding or removing an `.mdx` file.
+
+```tsx
+export function HelloWorld() {
+  return <p>Upload equals publish.</p>;
+}
+```

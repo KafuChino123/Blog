@@ -48,6 +48,11 @@ function removeLeadingTitle(markdown: string): string {
   return markdown.replace(/^\s*#\s+.+\s*$/m, "").trimStart();
 }
 
+function extractTitleFromContent(markdown: string): string {
+  const match = markdown.match(/^\s*#\s+(.+?)\s*$/m);
+  return match ? match[1].replace(/[`*_~\[\]]/g, "") : "";
+}
+
 function slugify(text: string): string {
   return text
     .normalize("NFKC")
@@ -156,7 +161,11 @@ function TableOfContents({ items, onItemClick }: { items: TocItem[]; onItemClick
 export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
   const [tocOpen, setTocOpen] = useState(false);
   const { language, t } = useLanguage();
-  const content = useMemo(() => removeLeadingTitle(post.content), [post.content]);
+  const activeContent = useMemo(() => {
+    const raw = language === "en" && post.contentEn ? post.contentEn : post.content;
+    return removeLeadingTitle(raw);
+  }, [post.content, post.contentEn, language]);
+  const content = activeContent;
   const toc = useMemo(() => extractToc(content), [content]);
   const formattedDate = formatDate(post.date, language);
   const mobileFabBottom = "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)";
@@ -194,7 +203,11 @@ export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
             </Link>
 
             <div className="space-y-4">
-              <h1 className="text-3xl sm:text-4xl font-bold text-foreground leading-tight text-balance">{post.title}</h1>
+              <h1 className="text-3xl sm:text-4xl font-bold text-foreground leading-tight text-balance">
+                {language === "en" && post.contentEn
+                  ? extractTitleFromContent(post.contentEn)
+                  : post.title}
+              </h1>
 
               {post.tags.length > 0 && (
                 <div className="flex flex-wrap gap-2">

@@ -12,6 +12,8 @@ interface PostFileData extends Post {
 
 interface PostMeta {
   tags: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 function listPostFilenames(): string[] {
@@ -21,7 +23,7 @@ function listPostFilenames(): string[] {
 
   return fs
     .readdirSync(POSTS_DIRECTORY, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && path.extname(entry.name) === ".mdx")
+    .filter((entry) => entry.isFile() && path.extname(entry.name) === ".mdx" && !entry.name.endsWith(".en.mdx"))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -163,11 +165,24 @@ function readPostMeta(filename: string): PostMeta {
   }
 
   const fileContent = fs.readFileSync(metaPath, "utf8");
-  const parsed = JSON.parse(fileContent) as { tags?: unknown };
+  const parsed = JSON.parse(fileContent) as { tags?: unknown; createdAt?: string; updatedAt?: string };
 
   return {
     tags: normalizeTags(parsed.tags, metaPath),
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
   };
+}
+
+function readEnglishContent(filename: string): string | undefined {
+  const enPath = path.join(
+    POSTS_DIRECTORY,
+    `${path.basename(filename, ".mdx")}.en.mdx`,
+  );
+  if (fs.existsSync(enPath)) {
+    return fs.readFileSync(enPath, "utf8");
+  }
+  return undefined;
 }
 
 function readPostFile(filename: string): PostFileData {
@@ -176,7 +191,14 @@ function readPostFile(filename: string): PostFileData {
   const meta = readPostMeta(filename);
   const stats = fs.statSync(filePath);
   const slug = getSlugFromFilename(filename);
-  const timestamp = getTimestamp(stats);
+  const contentEn = readEnglishContent(filename);
+
+  // Prefer date from meta.json, fall back to file stat
+  const timestamp = meta.createdAt
+    ? new Date(meta.createdAt).getTime()
+    : getTimestamp(stats);
+  const date = meta.createdAt || formatTimestamp(getTimestamp(stats));
+
   const title = extractTitle(content, slug);
   const excerpt = extractExcerpt(content) || title;
 
@@ -184,9 +206,11 @@ function readPostFile(filename: string): PostFileData {
     slug,
     title,
     excerpt,
-    date: formatTimestamp(timestamp),
+    date,
     tags: meta.tags,
     content,
+    contentEn,
+    hasTranslation: !!contentEn,
     timestamp,
   };
 }
@@ -198,6 +222,7 @@ function toPostSummary(post: PostFileData): PostSummary {
     excerpt: post.excerpt,
     date: post.date,
     tags: post.tags,
+    hasTranslation: post.hasTranslation,
   };
 }
 
