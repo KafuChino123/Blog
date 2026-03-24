@@ -246,6 +246,14 @@ export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
 
                   return <CodeBlock className={className}>{value}</CodeBlock>;
                 },
+                img({ src, alt, ...props }) {
+                  const s = typeof src === "string" ? src : "";
+                  const resolvedSrc =
+                    s && !s.startsWith("http") && !s.startsWith("/")
+                      ? `/images/${post.slug}/${s.replace(/^\.\//, "")}`
+                      : s;
+                  return <img src={resolvedSrc} alt={alt || ""} {...props} />;
+                },
                 a({ children, href, ...props }) {
                   return (
                     <a href={href} target={href?.startsWith("http") ? "_blank" : undefined} rel={href?.startsWith("http") ? "noopener noreferrer" : undefined} {...props}>

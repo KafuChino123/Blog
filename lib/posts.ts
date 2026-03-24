@@ -16,31 +16,23 @@ interface PostMeta {
   updatedAt?: string;
 }
 
-function listPostFilenames(): string[] {
+function listPostSlugs(): string[] {
   if (!fs.existsSync(POSTS_DIRECTORY)) {
     return [];
   }
 
   return fs
     .readdirSync(POSTS_DIRECTORY, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && path.extname(entry.name) === ".mdx" && !entry.name.endsWith(".en.mdx"))
-    .map((entry) => entry.name)
+    .filter((entry) => entry.isDirectory())
+    .filter((entry) =>
+      fs.existsSync(path.join(POSTS_DIRECTORY, entry.name, "index.mdx")),
+    )
+    .map((entry) => entry.name.normalize("NFKC"))
     .sort((a, b) => a.localeCompare(b));
 }
 
-function getSlugFromFilename(filename: string): string {
-  return path.basename(filename, ".mdx").normalize("NFKC");
-}
-
-function getPostPath(filename: string): string {
-  return path.join(POSTS_DIRECTORY, filename);
-}
-
-function getPostMetaPath(filename: string): string {
-  return path.join(
-    POSTS_DIRECTORY,
-    `${path.basename(filename, ".mdx")}.meta.json`,
-  );
+function postDir(slug: string): string {
+  return path.join(POSTS_DIRECTORY, slug);
 }
 
 function normalizeSlug(slug: string): string {
@@ -107,45 +99,34 @@ function extractExcerpt(markdown: string): string {
     .filter(Boolean);
 
   for (const block of blocks) {
-    if (/^#{1,6}\s/.test(block)) {
-      continue;
-    }
-
-    if (/^(import|export)\s/.test(block)) {
-      continue;
-    }
-
-    if (/^(>|[-*+]\s|\d+\.\s)/.test(block)) {
-      continue;
-    }
-
-    if (/^</.test(block)) {
-      continue;
-    }
+    if (/^#{1,6}\s/.test(block)) continue;
+    if (/^(import|export)\s/.test(block)) continue;
+    if (/^(>|[-*+]\s|\d+\.\s)/.test(block)) continue;
+    if (/^</.test(block)) continue;
 
     const text = stripMarkdown(block);
-    if (text) {
-      return text;
-    }
+    if (text) return text;
   }
 
   return "";
 }
 
 function normalizeTags(tags: unknown, filePath: string): string[] {
-  if (tags === undefined) {
-    return [];
-  }
+  if (tags === undefined) return [];
 
   if (!Array.isArray(tags)) {
-    throw new Error(`Invalid tags in ${filePath}: expected an array of strings.`);
+    throw new Error(
+      `Invalid tags in ${filePath}: expected an array of strings.`,
+    );
   }
 
   const uniqueTags = new Set<string>();
 
   for (const tag of tags) {
     if (typeof tag !== "string") {
-      throw new Error(`Invalid tags in ${filePath}: expected an array of strings.`);
+      throw new Error(
+        `Invalid tags in ${filePath}: expected an array of strings.`,
+      );
     }
 
     const normalizedTag = tag.trim();
@@ -157,15 +138,19 @@ function normalizeTags(tags: unknown, filePath: string): string[] {
   return Array.from(uniqueTags);
 }
 
-function readPostMeta(filename: string): PostMeta {
-  const metaPath = getPostMetaPath(filename);
+function readPostMeta(slug: string): PostMeta {
+  const metaPath = path.join(postDir(slug), "meta.json");
 
   if (!fs.existsSync(metaPath)) {
     return { tags: [] };
   }
 
   const fileContent = fs.readFileSync(metaPath, "utf8");
-  const parsed = JSON.parse(fileContent) as { tags?: unknown; createdAt?: string; updatedAt?: string };
+  const parsed = JSON.parse(fileContent) as {
+    tags?: unknown;
+    createdAt?: string;
+    updatedAt?: string;
+  };
 
   return {
     tags: normalizeTags(parsed.tags, metaPath),
@@ -174,26 +159,18 @@ function readPostMeta(filename: string): PostMeta {
   };
 }
 
-function readEnglishContent(filename: string): string | undefined {
-  const enPath = path.join(
-    POSTS_DIRECTORY,
-    `${path.basename(filename, ".mdx")}.en.mdx`,
-  );
-  if (fs.existsSync(enPath)) {
-    return fs.readFileSync(enPath, "utf8");
-  }
-  return undefined;
-}
+function readPostFile(slug: string): PostFileData {
+  const dir = postDir(slug);
+  const indexPath = path.join(dir, "index.mdx");
+  const enPath = path.join(dir, "index.en.mdx");
 
-function readPostFile(filename: string): PostFileData {
-  const filePath = getPostPath(filename);
-  const content = fs.readFileSync(filePath, "utf8");
-  const meta = readPostMeta(filename);
-  const stats = fs.statSync(filePath);
-  const slug = getSlugFromFilename(filename);
-  const contentEn = readEnglishContent(filename);
+  const content = fs.readFileSync(indexPath, "utf8");
+  const meta = readPostMeta(slug);
+  const stats = fs.statSync(indexPath);
+  const contentEn = fs.existsSync(enPath)
+    ? fs.readFileSync(enPath, "utf8")
+    : undefined;
 
-  // Prefer date from meta.json, fall back to file stat
   const timestamp = meta.createdAt
     ? new Date(meta.createdAt).getTime()
     : getTimestamp(stats);
@@ -202,7 +179,9 @@ function readPostFile(filename: string): PostFileData {
   const title = extractTitle(content, slug);
   const excerpt = extractExcerpt(content) || title;
   const titleEn = contentEn ? extractTitle(contentEn, slug) : undefined;
-  const excerptEn = contentEn ? (extractExcerpt(contentEn) || titleEn) : undefined;
+  const excerptEn = contentEn
+    ? extractExcerpt(contentEn) || titleEn
+    : undefined;
 
   return {
     slug,
@@ -233,8 +212,8 @@ function toPostSummary(post: PostFileData): PostSummary {
 }
 
 export function getAllPosts(): PostSummary[] {
-  return listPostFilenames()
-    .map((filename) => readPostFile(filename))
+  return listPostSlugs()
+    .map((slug) => readPostFile(slug))
     .sort(
       (a, b) => b.timestamp - a.timestamp || a.slug.localeCompare(b.slug),
     )
@@ -249,14 +228,12 @@ export function getAllTags(): string[] {
 
 export function getPostBySlug(slug: string): Post | null {
   const normalizedSlug = normalizeSlug(slug);
-  const filename = listPostFilenames().find(
-    (entry) => getSlugFromFilename(entry) === normalizedSlug,
-  );
+  const allSlugs = listPostSlugs();
 
-  if (!filename) {
+  if (!allSlugs.includes(normalizedSlug)) {
     return null;
   }
 
-  const { timestamp: _timestamp, ...post } = readPostFile(filename);
+  const { timestamp: _timestamp, ...post } = readPostFile(normalizedSlug);
   return post;
 }

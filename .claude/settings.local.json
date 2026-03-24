@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh run:*)",
+      "Read(//Users/shuoma/GitHub/obsidian-blog-publisher/**)",
+      "Bash(npm run:*)"
+    ]
+  }
+}
