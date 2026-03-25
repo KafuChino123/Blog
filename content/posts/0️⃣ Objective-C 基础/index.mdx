@@ -1,0 +1,643 @@
+# 0️⃣ Objective-C 基础
+
+#### 1. Obj-C & Java & Swift中，方法参数和成员变量的比较
+参考来源：
+https://www.yigegongjiang.com/2019/SwiftStruct/
+https://chat.deepseek.com/a/chat/s/b0a7d0d8-a81e-4538-9ea0-8bb8ac72f416
+##### 1.1 值类型 & 引用类型的不同
+###### 1.1.1 值类型 & 引用类型
+
+- **值类型**：每个实例持有数据的副本，并且该副本对于每个实例来说是独一无二的一份；
+
+- **引用类型**：该类型的实例共享数据唯一的一份副本（在native层面说的话，就是该类型的每个实例都指向内存中的==同一个地址==），比如类（class）就是最典型的引用类型。
+###### 1.1.2 Java
+
+
+###### 1.1.3 Objective-C
+
+
+###### 1.1.4 特殊的Swift
+
+---
+#### 2. 动态类型和动态绑定
+##### 2.1 动态绑定和id数据类型
+- **id类型**：==是一种动态类型，一种通用的对象类型==，==可以指向任何 Objective-C 对象的指针，可以用来存储属于任何类的对象==。你可以用它指向任何类的实例（如 `NSString`、`NSArray` 或自定义类），但在运行时需**确保对象能响应调用的方法**，否则会崩溃。
+  https://chat.deepseek.com/a/chat/s/77092b14-4720-49e9-bfff-9a85469528d3
+- **Obj-C系统总是跟踪对象所属的类**：先判定对象的类，然后在==运行时==确定需要动态调用的方法，而不是在编译的时候。
+##### 2.2 编译时和运行时检查
+- 因为存储在id变量中的对象在编译时无法确定，所以一些==测试推迟到运行时进行==。也就是说，推迟到程序执行时。
+
+- 考虑下列代码：
+``` Objective-C
+Fraction *f1 = [[Fraction alloc] init]; // 初始化一个分数对象
+[f1 setReal: 10.0 andImaginary: 2.5]; // 设置一个复数
+```
+这个方法应用于Complex类，而Fraction（分数）类中没有对应的`setReal: andImaginary:`方法。当编译包含这些语句的程序时，会显示以下信息：
+`'Fraction' may not respond to 'setReal:andImaginary:'`
+
+- Objective-C编译器知道`f1`是一个Fraction对象，因为它就是这样声明的。编译器也同样知道，当遇到消息表达式` [f1 setReal: 10.0 andImaginary: 2.5];`时，Fraction类并不包含`setReal:andImaginary:`方法（并且也没有继承该方法），所以会生成上面所示的警告信息。
+
+- 考虑下列代码：
+```Objective-C
+id *data = [[Fraction alloc] init]; // 初始化一个分数对象，但是id类型
+[data setReal: 10.0 andImaginary: 2.5]; // 设置一个复数
+```
+这些代码行在编译时，编译器不会产生警告消息。这是因为==编译器在处理源文件时并不知道存储在data中的对象类型==（即编译器并不知道Fraction对象早已存在于这个变量中）。
+
+- **直到运行包含这些代码行的程序时，程序才会崩溃**，出现如下报错：
+`- [Fraction setReal:andImaginary:]: unrecognized selector sent to instance 0x103f00`
+
+- 当程序运行时，系统首先检查存储在data中的对象类型。因为在data中存储有Fraction，所以==运行时系统检查并查找定义在Fraction类中的==`setReal:andImaginary:`方法。因为未找到这个方法，所以显示前面的出错消息并且终止程序的运行。
+##### 2.3 id数据类型与静态类型
+
+- 将一个变量定义为特定类的对象时，==使用的是静态类型==。==“静态”指的是对存储在变量中对象的类型进行显式声明==。这样，存储在这种形态中的对象的类是**预定义**的，也就是静态的。使用静态类型时，编译器尽可能确保变量的用法在程序中始终保持一致。编译器能够通过检查来确定应用于对象的方法是由该类定义的还是由该类继承的，否则会显示警告消息。
+  **Note**: 调用对象上的方法也可以通过指定方法的名称作为变量。这种情况下，编译器无法检查你的方法参数或者返回类型。
+
+- 关于静态类型存在的必要性：能更好的在程序编译阶段而不是在运行时指出错误。如果留到运行时，那么在错误发生时，甚至我们可能都不在现场。如果程序投入到生产环境，一些倒霉的用户在运行程序时会意外的发现，特定的对象不能够识别某个方法，从而导致程序崩溃。
+- 使用静态类型另一个原因是可以提高程序可读性，提高代码的可维护性。
+  **Note**: 不能为id变量使用点运算符，否则编译器会报错。
+---
+#### 3. NSString & NSMutableString
+![](NSString&NSMutableString.jpg)
+
+---
+#### 4. 对象初始化
+
+- 重载init方法的“标准模版”：
+```Objective-C
+- (instancetype) init {
+	self = [super init];
+	if (self) {
+		// 初始化代码
+	}
+	
+	return self;
+}
+```
+- 这个方法首先会调用父类的初始化方法。执行父类的初始化方法，使得继承的实例变量能够正常初始化；
+- 必须将父类init方法的执行结果赋值给self，因为初始化过程改变了对象在内存中的位置（也就是引用将要改变）；
+- 如果父类的初始化过程成功，返回的值将是非空的，通过if语句进行验证。注释说明可以在这个代码块的位置放入自定义的初始化代码。通常可以在这个位置创建并初始化实例变量。
+
+---
+#### 5. Obj-C typedef & Swift typealias
+
+在 Objective-C 和 Swift 中，`typedef` 和 `typealias` 的核心目的相似，都是为现有类型定义别名以提高代码可读性和简化复杂类型的声明，但它们在功能和灵活性上存在一些差异。以下是详细对比：
+##### **共同点**
+1. **基本别名功能**  
+   - **Objective-C** 的 `typedef` 和 **Swift** 的 `typealias` 都可以为现有类型（基本类型、结构体、类等）定义别名。  
+   - 例如：
+```Objective-C
+// Objective-C
+typedef int MyInt;
+typedef void (^CompletionBlock)(void);
+```
+```swift
+// Swift
+typealias MyInt = Int
+typealias CompletionBlock = () -> Void
+```
+
+Note:  `^` 表示这是一个 **[[#^439e1a|Block 类型]]**，类似于函数指针，但功能更强大（可以捕获上下文变量）。
+https://chat.deepseek.com/a/chat/s/78353455-f302-481a-912c-65e369c1902f
+##### **差异点**
+1. **泛型支持**  
+   - **Swift** 的 `typealias` 可以直接支持泛型别名，甚至可以**部分具体化泛型参数**：
+```swift
+typealias StringDictionary<T> = Dictionary<String, T>
+typealias IntArray = Array<Int>
+```
+   - **Objective-C** 的 `typedef` 不支持泛型参数化。虽然 Objective-C 有轻量级泛型（如 `NSArray<NSString *>`），但无法通过 `typedef` 创建泛型别名。
+
+2. **协议组合**  
+   - **Swift** 的 `typealias` 可以用于组合多个协议，或为类型添加协议约束：
+```swift
+protocol A {}
+protocol B {}
+typealias ABProtocol = A & B  // 同时遵循 A 和 B 的协议组合
+typealias ViewWithAB = UIView & A & B  // 类型和协议的组合
+```
+   - **Objective-C** 的 `typedef` 无法实现协议组合（Objective-C 的协议本身支持组合语法 `id<ProtocolA, ProtocolB>`，但不能通过 `typedef` 别名简化）。
+
+3. **关联类型（Associated Type）**  
+   - 在 **Swift** 协议中，`typealias` 可以用作关联类型的替代（例如简化泛型协议的实现）：
+```swift
+protocol Container {
+    associatedtype Item
+    func add(_ item: Item)
+}
+     
+class IntContainer: Container {
+    typealias Item = Int  // 实现关联类型
+    func add(_ item: Int) { ... }
+}
+```
+   - **Objective-C** 没有类似功能，因为其泛型和协议系统较为简单。
+
+4. **作用域和扩展性**  
+   - **Swift** 的 `typealias` 可以定义在全局、类、结构体、枚举甚至协议内部，灵活性更高。
+   - **Objective-C** 的 `typedef` 通常是全局的或在头文件中定义，作用域控制较弱。
+##### **总结**
+| 特性                | Objective-C `typedef`         | Swift `typealias`              |
+|---------------------|-------------------------------|--------------------------------|
+| **基本类型别名**     | ✅                            | ✅                             |
+| **闭包/函数指针别名** | ✅                            | ✅                             |
+| **泛型别名**         | ❌                            | ✅（支持参数化）               |
+| **协议组合**         | ❌                            | ✅                             |
+| **关联类型**         | ❌                            | ✅（在协议中）                 |
+| **作用域灵活性**     | 较弱                          | 较强（全局、类型内部、扩展等） |
+
+##### **适用场景**
+- **Objective-C `typedef`**：适合简化基础类型、结构体、枚举或闭包类型的名称。
+- **Swift `typealias`**：除了基础别名，还可用于协议组合、泛型优化和协议设计，是更现代且功能丰富的工具。
+
+如果在 Swift 中需要迁移 Objective-C 的 `typedef`，大多数情况下可以直接用 `typealias` 替代，但 Swift 的别名功能更加灵活和强大。
+
+---
+
+#### 6. 分类和协议
+##### 6.1 分类
+- **分类(Category)**：==可以将类的定义模块化到相关方法的组或分类中==，并且提供了扩展现有类定义的简便方式，并且不需要访问类的源代码，也无须创建子类。
+Fraction.h：
+```Objective-C
+@interface Fraction : NSObject
+
+@property int numerator, denominator;
+
++ (Fraction *) allocF;
++ (int) count;
+
+- (Fraction *) initWith: (int) n over: (int) d;
+- (void) print;
+- (void) setNumerator: (int) n;
+- (void) setDenominator: (int) d;
+- (int)  adjustNumerator: (int) offset;
+- (int)  getNumerator;
+- (void) setTo: (int) n over: (int) d;
+- (void) seet: (int) n : (int) d;
+- (void) reduce;
+
+@end
+
+// 分类 Category
+@interface Fraction (MathOps)
+
+- (Fraction *) add: (Fraction *) f;
+- (Fraction *) sub: (Fraction *) f;
+- (Fraction *) mul: (Fraction *) f;
+- (Fraction *) div: (Fraction *) f;
+
+@end
+
+```
+
+Fraction.m：
+``` Objective-C
+
+#import "Fraction.h"  
+@implementation Fraction
+
+@synthesize numerator, denominator;
+
+// 重载alloc并不是好的编程实践，因为这个方法处理内存的物理分配
++ (Fraction *) allocF {
+    extern int gCounter;
+    ++gCounter;
+    return [Fraction alloc];
+}
+
++ (int) count {
+    extern int gCounter;
+    return gCounter;
+}
+
+- (Fraction *) initWith: (int) n over: (int) d {
+    self = [super init];
+    if (self) {
+        [self setTo:n over:d];
+    }
+    return self;
+}
+
+- (void) print {
+    int x = numerator ?: -1;
+    NSLog(@"The fraction is %i / %i, x = %i", numerator, denominator, x);
+}
+
+- (int)adjustNumerator: (int) offset {
+    return numerator + offset;
+}
+
+- (int)getNumerator {
+    return numerator;
+}
+
+- (void) setTo: (int)n over:(int)d {
+    numerator = n;
+    denominator = d;
+}
+
+- (void) seet: (int) n : (int) d {
+    numerator = n;
+    denominator = d;
+}
+
+- (void)reduce {
+    int u = numerator;
+    int v = denominator;
+    int temp;
+    while (v != 0) {
+        temp = u % v;
+        u = v;
+        v = temp;
+    }
+    numerator /= u;
+    denominator /= u;
+}
+
+@end
+
+// 分类 Category
+@implementation Fraction (MathOps)
+
+- (Fraction *)add:(nonnull Fraction *) f {
+    // a/b + c/d = (a*d + b*c) / (b*d)
+    Fraction *result = [[Fraction alloc] init];
+    result.numerator = numerator * f.denominator + denominator + f.numerator ;
+    result.denominator = denominator * f.denominator;
+    [self reduce];
+    return result;
+}
+
+- (Fraction *)sub:(nonnull Fraction *) f {
+    Fraction *result = [[Fraction alloc] init];
+    result.numerator = numerator * f.denominator - denominator + f.numerator ;
+    result.denominator = denominator * f.denominator;
+    [self reduce];
+    return result;
+}
+
+- (Fraction *)mul:(nonnull Fraction *) f {
+    Fraction *result = [[Fraction alloc] init];
+    result.numerator = (numerator * f.denominator) * (denominator + f.numerator) ;
+    result.denominator = denominator * f.denominator;
+    [self reduce];
+    return result;
+}
+
+- (Fraction *)div:(nonnull Fraction *) f {
+    Fraction *result = [[Fraction alloc] init];
+    result.numerator = (numerator * f.denominator) / (denominator + f.numerator) ;
+    result.denominator = denominator * f.denominator;
+    [self reduce];
+    return result;
+}
+
+@end
+```
+
+**Note**: 按照惯例，作为分类的.h和.m文件的基本名称是由类的名称紧接分类的名称。例如，我们把分类的接口部分的文件名命名为FractionMathOps.h，实现部分命名为FractionMathOps.m。一些程序员使用符号“+”来分割类和分类的名字，比如Fraction+MathOps.h。
+
+##### 6.2 类的扩展
+- 有一种特殊的情况是创建一个未命名的分类，且在括号“( )”之间不指定名字。这种特殊的语法定义称为==类的扩展==，也叫==匿名分类==。定义一个这样的未命名分类时，可以通过定义额外的实例变量和属性来扩展类（这在有命名分类中不允许）。**未命名分类中的方法需要在主实现区域实现**，而不是分离的实现区域。
+
+- 未命名分类的方法都是==私有的==。（方法并没有在接口部分登记，这个意义上它们是私有的。然而，如果知道私有方法的名字，也可以调用到。）
+
+```Objective-C
+@interface ClassName ()
+ 
+@end
+```
+
+##### 6.3 分类注意事项
+- 分类可以重写该类中的另一个方法，但是不提倡。因为1️⃣重写一个方法后，不能再访问原先的方法，需要确保原有的功能都复制到了重写方法中；2️⃣如果真的要重写，可能创建子类更加合适。如果要在子类中重写方法，仍然可以通过向super发送消息来引用父类的方法；
+- 可以给一个类设置很多分类，只要遵守规则即可。如果一个方法出现在多个分类中，该语句不会指定使用那个分类；
+- 通过使用分类添加新方法来扩展类不仅会影响这个类，也会==影响它的所有子类==；
+- 对象/分类命名仍需保持唯一；
+
+- 分类只能增加方法；
+- 不能访问私有属性（本类的@implementation），因为在编译时私有属性对分类不可见。但可以用self，因为`self` 是当前类的实例对象，分类中的方法本质上属于类的一部分，因此可以通过 `self` 调用类的**公开方法**（包括属性和方法）；
+- 优先调用分类的同名方法。
+
+##### 6.4 协议
+- 与swift协议的对比：
+  https://chat.deepseek.com/a/chat/s/7793c366-55a6-436e-8fa1-5945a2444903
+- ==协议是多个类共享的方法列表。==协议中列出的方法没有相应的实现，计划有其他人来实现。并且协议提供了一种方式，用指定的名称定义一组有一定相关性的方法。这些方法通常有文档说明，如果需要，可以在自己的类定义中实现。
+- 协议列出了一组方法，有些是可选的，有些是必须实现。如果决定实现特定协议的所有方法，也就意味着要遵守（confirm to）或采用（adopt）这项协议。可以定义协议中的所有方法都是必须实现的，也可以都是选择实现的。
+- 下列是在标准的Foundation头文件NSObject.h中定义NSCopying协议的方式：
+  NSObject.h :
+```Objective-C
+@protocol NSCopying
+- (id) copyWithZone: (NSZone *)zone;
+@end
+```
+- 如果你的类采用NSCopying协议，则**必须实现名为`copyWithZone:`的方法**。
+- 告知编译器要采用的协议的语法：协议名称放在类名和它的父类名称之后，语句如下：
+```Objective-C
+@interface AddressBook: NSObject < NSCopying, NSCoding >
+```
+- 这说明，AddressBook是「 父类为NSObject的对象 」，并且遵守NSCopying协议。
+- 使用时，无需在接口部分声明内部方法，因为系统已经知道，但是要在实现部分定义这些方法。
+
+- 协议是==无类的（classless）==，不引用任何类，任何类都可以遵守某一个协议。
+
+- 有如下代码：
+```Objective-C
+@protocol Drawing
+- (void) paint;
+- (void) erase;
+@optional
+- (void) outline;
+@end
+```
+- 1️⃣ 使用`conformsToProtocol:`检查一个对象是否遵循某项协议。例如，如果有一个名为currentObject的对象，并且想要看它是否遵循Drawing协议，可以向它发送绘图消息。代码如下：
+```Objective-C
+id currentObject;
+ // ...
+if ([currentObject conformsToProtocol: @protocol (Drawing)] == YES) {
+	// 给 currentObject 发送 paint，erase，或者 outline 消息
+	// ...	
+}
+```
+- 这里使用的专用`@protocol`指令用于获取一个协议名称，并产生一个Protocol对象，`conformsToProtocol:`方法期望这个对象作为它的参数。
+
+- 2️⃣ 为了测试 currentObject 是否实现了可选的outline方法，可以有如下代码：
+```Objective-C
+if ([currentObject respondsToSelector: @selector (outline)] == YES) {
+	[currentObject outline];
+}
+```
+
+- 3️⃣ 通过在类型名称后的尖括号中添加协议名称，借助编译器来检查变量的一致性。语句如下：
+```Objective-C
+id <Drawing> currentObject;
+```
+- 告知编译器 currentObject 将包含遵守 Drawing 协议的对象。如果向 currentObject 指派静态类型的对象，这个对象不遵守 Drawing 协议，编译器会发出一条警告消息：`warning: class 'square' does not implement the 'Drawing' protocol`
+  这里存在一项编译器校验，所以向 currentObject 指派一个 id 变量不会产生这条消息，因为编译器无法知道存储在 id 变量中的对象是否遵守 Drawing 协议。
+
+- 4️⃣ 定义一项协议时，也可以扩展现有协议：
+```Objective-C
+@protocol Drawing3D <Drawing>
+```
+- 说明 Drawing3D 协议也采用了 Drawing 协议。因此，任何采用 Drawing3D 协议的类都必须实现此协议列出的方法，以及 Drawing 协议的方法。
+
+- 分类也可以采用一项协议：
+```Objective-C
+@interface Fraction (Stuff) <NSCopying, NSCoding>
+```
+- 此处，Fraction 拥有一个分类 Stuff，采用了 NSCopying 和 NSCoding 协议。
+
+- 如果不想再公开的 .h 文件中声明你的类符合特定的协议，可以将协议像分类扩展一样写在 .m 文件中：
+```Objective-C
+@interface ProfilePreviewController () <NavigationBarAdjustments>
+// ...
+@end
+```
+
+- 和类名一样，协议的名称也必须是唯一的。
+##### 6.5 代理 (?)
+- 代理也是==一种两个类之间的接口定义==，指一个对象提供机会给另一个对象中的行为发生变化是做出的反应。基本思想是：==两个对象协同解决问题，通常用于对象之间的通信==。
+
+- 代理设计模式的基本特点： 
+	- 简化了对象的行为，最小化了对象之间的耦合度；
+	- 使用代理，一般来说无需子类化；
+	- 简化了我们应用程序开发，既容易实现，又灵活。
+- For example: 
+  https://www.cnblogs.com/cokecoffe/archive/2012/05/05/2537109.html
+  目的：将A的事情委托给B来做  
+	 步骤1.在A中声明协议，即要委托出去的事情（方法）；
+	 步骤2.A中声明一个委托对象，即要委托给谁去办，用id<协议名字>委托对象名；  
+	 步骤3.比如想让B做A的事情，那么B的interface中要宣布自己遵循A中制定的那个协议；
+	 步骤4.A调用委托执行那件事情去.即`[delegate fun]`。
+- A.h
+```Objective-C
+@protocol Mydelegate // 协议的声明
+
+- (void) Fun;
+
+@end
+
+@interface A: NSObject {
+	// 声明一个委托对象，我们要把事情委托给实现Mydelegate协议的类
+	id <Mydelegate> delegate;
+}
+
+@property(assign,nonatomic) id <Mydelegate> delegate;
+
+@end
+```
+
+- A.m
+```Objective-C
+@implementation
+
+- (void) init {
+    delegate = B;
+}
+
+- (void) FunToOther {
+    [delegate Fun]; //将消息发送给委托去处理
+}
+
+@end
+```
+
+- 委托对象的实现：
+- B.h
+```Objective-C
+#import"A.h"
+@interface B: NSObject<MyDelegate>
+ 
+@end
+```
+
+- B.m
+```Objective-C
+@implementation
+ 
+- (void) fun {
+    //实现Mydelegate中制定的方法
+}
+ 
+@end
+```
+
+##### 6.6 非正式协议
+- 非正式（informal）协议：本质是一个分类，列出了一组方法，但是并**没有实现这些方法**。每个人（或者几乎每个人）都继承相同的根对象。因此，==非正式分类通常是为根类定义的==。有时，非正式协议也称为抽象（abstract）协议。
+- 声明非正式协议的类自己并不实现这些方法，并且选择实现这些方法的子类需要在它的接口部分重新声明这些方法，同时还要实现这些方法中的一个或者多个。和正式协议不同，编译器不提供有关非正式协议的帮助。- 这里没有遵守协议或者由编译器测试这样的概念。
+- 如果一个对象采用正式协议，则它必须遵守协议中的所有信息。这可以在运行及编译时强制执行。如果一个对象采用非正式协议，则它可能不需要采用此协议的所有方法（具体取决于这项协议）。可以在运行时强制要求遵守一项非正式协议（借助`respondsToSelector:`），但是在编译时不可以。
+
+- Note：`@optional`指令添加到了 Objective-C 2.0 语言中，用于取代非正式协议的使用。我们可以看到几个 UIKit 类是这样用的。
+
+##### 6.7 合成对象（组合 vs 继承）
+- 有这样一个类，其包含其他类的一个或多个对象。这个新类的对象就是==合成对象（composite）==，因为它是由其他对象组成的。
+
+举个例子，对于 Square 类，将这个类定义为 Rectangle 的子类是理所当然的，因为正方形是等边的矩形。定义子类时，它继承了父类的所有实例变量和方法。但是在一些情况下，这种做法并不好——因为**在父类中定义的一些方法可能并不适合子类使用**。Square类继承了 Rectangle 的`setWidth:andHeight:`方法用于设置宽和高，但是并不适用于Square（虽然可以正常工作）。此外，创建子类时，必须确保所有被继承的方法能够正常工作，因为这个类的用户可能会访问他们。最终，子类依赖于父类，改变父类有可能使子类中的方法无法正常工作。
+
+作为创建子类的替代方式，可以定义一个新类，它包含要扩展类的实例变量。然后，只需在新类中定义适合该类的方法。返回 Square 的例子，下面是 Square 类另一种方式的定义：
+```Objective-C
+@interface Square: NSObject {
+	Rectangle *rect;
+}
+-(int) setSide: (int) s;
+-(int) side;
+-(int) area;
+-(int) perimeter;
+@end
+
+@interface Rectangle : NSObject
+@property int width, height;
+- (void) setWidth: (int) w andHeight: (int) h;
+- (int) area;
+- (int) perimeter;
+@end
+```
+此处定义的 Square 类有4个方法。和子类版本不同，子类版本允许你直接访问 Rectangle 的方法（`setWidth:andHeight:`等），同时这个 Square 的定义中不包含这些，本身并不适合直接应用到 Square 上的方法。
+
+如果以这种方式定义 Square，就需要为它包含的矩形分配存储空间。如果不重写方法，则以下语句
+```Objective-C
+Square *mySquare = [[Square alloc] init];
+```
+会分配一个新的 Square 对象，但是没有为存储在实例变量中的 Rectangle 对象 rect 分配存储空间（这里是指，==`rect`指针未指向任何有效的`Rectangle`实例（而非指针本身未分配）==）。因此，可能需要重写`init`或者添加`initWithSide:`之类的新方法来为其分配空间，并相应设置它的边。
+
+在 Square 类中定义方法时，也可以使用 Rectangle 的方法：
+```Objective-C
+// Square.m
+@implementation Square
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        rect = [[Rectangle alloc] init]; // 显式分配内存
+    }
+    return self;
+}
+
+-(int) area {
+	return [rect area];
+}
+@end
+```
+
+- **继承与组合，内存分配上的区别：**
+	- **继承**：  
+     `Square`作为`Rectangle`的子类，继承其`width`和`height`变量。创建`Square`实例时，父类`Rectangle`的存储空间**自动包含在子类中**，无需额外分配。
+	    
+	- **组合**：  
+     `Square`==仅持有`Rectangle`的指针`rect`==，必须==手动管理`rect`的生命周期==。若未在初始化时分配内存，`rect`将无法使用。
+	
+- ==**组合模式要求显式管理成员对象的内存**==，这是与继承对比的一个核心差异。
+
+---
+#### 7. SEL类型
+^21f94f
+
+`SEL`是==`objc_selector`结构体的别名==，代表方法的“选择器”。==它本质上是一个**唯一标识符**==，通过方法名生成，用于在运行时快速查找方法。
+
+---
+#### 8. 块（Blocks）
+^439e1a
+
+块是对C语言的一种扩展。它并未作为标准ANSI C所定义的部分，而是由 Apple 公司添加到语言中的。块看起来更像是函数。可以给块传递参数，正如给函数传递一样；而且块也具有返回值。与函数不同的是，==块定义在函数或者方法内部，并能够访问在函数或者方法范围内、块之外的任何变量==。一般来说，==这些变量能够访问但是并不能够改变这些变量的值==。
+
+有一种特殊的修改器（由块前面含有两个下划线的字符组成）能够修改块内变量的值。
+
+块能够==作为参数传递给函数或方法==，并且块的其中一个优势就在于，==能够让系统分配给其他处理器或应用的其他线程执行==。
+
+举个例子，关于这个`printMessage:`函数：
+```Objective-C
+void printMessage (void) {
+	NSLog(@"Programming is fun.");
+}
+```
+这样的一个 Block，也可以完成同样的任务：
+```Objective-C
+^(void) {
+	NSLog(@"Programming is fun.");
+}
+```
+
+块是以插入字符`^`开头为标识的。后面跟的一个括号表示块所需要的参数列表。在这个例子中，块并没有参数，所以在函数定义中仅需填入void。
+
+同样，也可以将这个块赋给一个名为`printMessage`的变量，只要变量声明正确：
+```Objective-C
+void (^printMessage) (void) = 
+	^(void) {
+		NSLog(@"Programming is fun.");
+	}
+```
+等号左边表示`printMessage`指向一个没有参数和返回值的块指针。**需要注意的是，赋值语句是以分号终止的。**
+
+执行一个变量引用的块，与函数的调用方式一致：
+```Objective-C
+printMessage();
+```
+
+块可以访问在其范围内定义的变量。变量的值同时作为块中定义的值，如下所示：
+```Objective-C
+#import <Foundation/Foundation.h>
+
+int main (int argc, char *argv[]) {
+	@autoreleasepool {
+		int foo = 10;
+		
+		void (^printFoo) (void) =
+			^(void) {
+				NSLog(@"foo = %i", foo);
+			};
+			
+		foo = 15;
+		printFoo();
+	}
+	return 0;
+}
+```
+输出：
+```
+foo = 10
+```
+
+块 printFoo 可以访问本地变量 foo 的值。==注意 foo 的值显示的是10，并不是15。这是因为变量foo在**定义块**的同时已经具有了值，而不是在块执行的时候。==
+
+==不可以在块内部修改已经定义过变量的值==。所以，如果你试图在块内部改变foo的值，就会得到编译器提示的错误信息：给只读变量“foo”赋了值。
+```Objective-C
+#import <Foundation/Foundation.h>
+
+int main (int argc, char *argv[]) {
+	@autoreleasepool {
+		int foo = 10;
+		
+		void (^printFoo) (void) =
+			^(void) {
+				NSLog(@"in block: foo = %i", foo);
+				foo = 20; // ** 该行会产生编译错误
+			};
+			
+		foo = 15;
+		printFoo();
+		NSLog(@"out of block: foo = %i", foo);
+	}
+	return 0;
+}
+```
+如果在定义本地变量foo之前插入 `__block` 修改器：
+```Objective-C
+__block int foo = 10;
+```
+运行程序，就会得到两条输出语句：
+```
+in block: foo = 15
+out of block: foo = 20
+```
+第一行显示的是调用块时 foo 的值，第二行验证块中能否将 foo 值改变为20。
+
+##### 8.1 关于 `__block` 修饰符
+
+在Objective-C中，使用`__block`修饰符会改变块对外部变量的捕获方式，使得变量在块内外的修改能够同步。具体来说：
+
+1. **默认行为（无`__block`修饰符）**：
+    - 块会捕获外部变量的**瞬时值**（值拷贝），后续对外部变量的修改不会影响块内部的值。
+    - 如示例中，`foo`在块定义后被改为15，但块仍输出定义时的值10。
+    
+2. **使用`__block`修饰符**：
+    - 变量会被改为以**引用方式**捕获，块内外共享同一存储位置。
+    - 块内访问的是变量的**实时值**，而非定义时的快照。
+    - 此时，若外部修改变量后调用块，块会使用最新的值。
