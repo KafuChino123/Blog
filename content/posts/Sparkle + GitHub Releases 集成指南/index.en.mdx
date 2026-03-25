@@ -1,0 +1,87 @@
+# Sparkle + GitHub Releases Integration Guide
+
+## I. One-time initialization configuration
+
+**One. Generate a key pair**
+
+"Bash"
+
+./Bin/generate_keys
+
+```
+
+- Public key → Fill in the `SUPublicEDKey` of `Info.plist`
+
+- Private key → automatically save in macOS Keychain, keep it properly, and do not disclose it.
+
+**Two. Configuration Info.plist**
+
+| Key | Type | Value |
+
+| -------------| ------| --------------------------------------------------------- |
+
+| `SUFeedURL` | String | `https://github.com/<user name>/<warehouse name>/releases/latest/download/appcast.xml` |
+
+| `SUPublicEDKey` | String | Public key generated in the previous step |
+
+---
+
+## II. The process of each edition
+
+**Step 1: Package Application**
+
+"Bash"
+
+Ditto -c -k --sequesterRsrc --keepParent MyApp.app MyApp.zip
+
+```
+
+**Step 2: Generate and sign appcast.xml**
+
+Put `MyApp.zip` into a separate folder, and then run it:
+
+"Bash"
+
+./Bin/generate_appcast/path/to/updates/folder
+
+```
+
+After execution, `appcast.xml` will be automatically generated in the folder.
+
+**Step 3: Modify the download address in appcast.xml**
+
+Change the `url` in `<enclosure>` to the real download address of GitHub Releases:
+
+```xml
+
+<enclosure
+
+Url="https://github.com/<username>/<warehouse name>/releases/download/v2.0/MyApp.zip"
+
+sparkle:edSignature="xxx..."
+
+Length="1623481"
+
+Type="application/octet-stream"/>
+
+```
+
+**Step 4: Create a new Release in GitHub**
+
+1. Enter the warehouse → Releases → Draft a new release
+
+2. Create tag, such as `v2.0`
+
+3. Upload attachments: `MyApp.zip` + `appcast.xml`
+
+4. Release Release
+
+---
+
+## III. Precautions
+
+- Each version ** must upload the latest `appcast.xml`** at the same time, otherwise Sparkle cannot detect the new version.
+
+- `SUFeedURL` uses the `latest/download/` path, which is permanently valid for one configuration and does not need to be modified every time.
+
+- If the private key is lost, you will not be able to sign the new version update. Please be sure to back it up.
