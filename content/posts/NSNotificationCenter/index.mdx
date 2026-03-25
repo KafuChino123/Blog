@@ -1,0 +1,168 @@
+# NSNotificationCenter
+
+[Apple Developer](https://developer.apple.com/documentation/foundation/nsnotificationcenter?language=objc)
+[稀土掘金参考](https://juejin.cn/post/6844903566209974280)
+
+==A notification dispatch mechanism that enables the broadcast of information to registered observers.==
+NSNotificationCenter是一种通知调度机制，允许向注册的观察者广播通知。
+
+一个消息可以被多个观察者（Observer）接收，一个观察者也可以接受多个消息。
+
+Note: NSNotificationCenter只能在单个应用程序中传递通知；如果要将通知发布到其他进程或接收来自其他进程的通知，请使用NSDistributedNotificationCenter（注意只在macOS 10.0+可以使用，iOS中不可使用）。
+
+#### 1 基本使用方法
+
+在 NSNotification.h 中：
+![](NSNotification.h.png)
+```Objective-C
+@property (class, readonly, strong) NSNotificationCenter *defaultCenter;
+```
+该属性是获取`NSNotificationCenter`唯一单例，它就是一个消息分发中心，通过使用这个唯一的实例我们进行==添加通知、发送通知、移除通知==。
+
+##### 1.1 添加通知（订阅通知）
+```Objective-C
+[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object:_obj0];
+```
+`_obj0`是创建的一个实例，这里暂时不讨论`object`参数的用法。`Observer`为响应者；`selector`为一个响应通知的方法，需要[[0️⃣ Objective-C 基础#^21f94f| SEL类型]]；`name`是一个标识，通知中心主要是通过它来实现消息的精确分发（当然object也有定位作用）。
+
+- 当name为空时，表示任意名称的通知都订阅。
+- 当object为空时，表示任意发送者都通知都订阅。
+- 当name和object都为空时，表示订阅所有通知，含系统通知，==可以通过此方法监听到所有系统通知。==
+- 当name和object都不为空时，表示只订阅指定通知名称和发送者都通知。
+##### 1.2 发送通知
+```Objective-C
+//便利方法，业务中会更常用
+[[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:_obj0 userInfo:@{@"key":@"_obj0"}];
+
+//使用NSNotification
+NSNotification *notification = [[NSNotification alloc] initWithName:@"test0" object:_obj2 userInfo:@{@"key":@"_obj2"}];
+ [[NSNotificationCenter defaultCenter] postNotification:notification];
+```
+发送通知和添加通知对应，需要`name、object`参数，这里多了一个==`userInfo`==。该参数==可以把需要携带的数据发送给该通知的响应者==。
+
+其实我们可以很轻易的想到，便利发送通知方法不过是对于使用`NSNotification`发送通知的一个**语法糖**，`NSNotification`才是消息体。
+
+##### 1.3 移除通知
+```Objective-C
+//移除该响应者的全部通知
+[[NSNotificationCenter defaultCenter]  removeObserver:self];
+
+//移除该响应者 name==@"test0" 的全部通知
+[[NSNotificationCenter defaultCenter] removeObserver:self name:@"test0" object:nil];
+
+//移除该响应者 name==@"test0" 且 object==_obj0 的全部通知
+[[NSNotificationCenter defaultCenter] removeObserver:self name:@"test0" object:_obj0];
+```
+移除通知这三个方法，从上至下越来越“精准”。
+
+在合理的位置移除通知是至关重要的：  
+- 让不希望继续接受通知的响应者失去对该通知的响应；  
+- ==避免重复添加相同通知==（响应者的内存为同一块的时候）；  
+- ==通知中心对响应者`observer`是使用`unsafe_unretained`修饰，当响应者释放会出现野指针，向野指针发送消息造成崩溃==；在iOS x(更新的系统版本有待考证)之后，苹果对其做了优化，会在响应者调用`dealloc`方法的时候执行`removeObserver:`方法。  
+  Note: **在后文会详细分析该问题。**
+
+不过，常规的业务场景一般是在该响应者释放的时候移除。
+```Objective-C
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+```
+
+##### 1.4 响应通知
+
+响应通知的时候会将`NSNotification`消息体传递过来，如代码所示：
+```Objective-C
+- (void)respondsToNotification:(NSNotification *)noti {
+    id obj = noti.object;
+    NSDictionary *dic = noti.userInfo;
+    NSLog(@"\n- self:%@ \n- obj:%@ \n- notificationInfo:%@", self, obj, dic);
+}
+```
+
+#### 2. `object:(nullable id) object` 参数
+
+- **添加通知**时，若指定了`object`参数，那么该响应者只会接收**发送通知**时`object`参数指定为==同一实例==的通知；
+- **发送通知**时，若指定了`object`参数，不会影响**添加通知**时没有指定`object`参数的响应者接收通知。
+
+example 1: 由于添加通知时，`object==nil`，所以该响应者==仍然能接收到该通知==。
+```Objective-C
+//添加通知
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object:nil];
+//发送通知
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:_obj0];
+```
+example 2: 由于添加通知时，指定了`object==_obj0`，而发送通知时，`object==nil`，所以==无法接收到通知==（只有当`object==_obj0`才能接收到通知）。
+```Objective-C
+//添加通知
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object: _obj0];
+//发送通知
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:nil];
+```
+
+#### 3. 通知线程问题
+进行如下测试——我们进入全局队列发送一个通知：
+```Objective-C
+dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSLog(@"发送通知 currentThread : %@", [NSThread currentThread]);
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:nil];
+});
+```
+在接收通知的地方将线程信息打印：
+```Objective-C
+发送通知 currentThread : <NSThread: 0x60400046aec0>{number = 3, name = (null)}
+响应通知 currentThread : <NSThread: 0x60400046aec0>{number = 3, name = (null)}
+```
+
+可以得出，==通知发送的线程和通知接收的线程是一致的==。由此看来，如果当我们不是百分百确认通知的发送队列是在主队列中时，最好加上一些代码对UI进行处理，防止出现界面更新不及时，甚至崩溃等问题：
+```Objective-C
+if (strcmp(dispatch_queue_get_label(DISPATCH_CURRENT_QUEUE_LABEL), dispatch_queue_get_label(dispatch_get_main_queue())) == 0) {
+        //UI处理
+} else {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        //UI处理
+    });
+}
+```
+
+#### 4. 是否需要移除通知？
+
+如果可能会重复添加通知，我们应该做好相应的处理。
+
+以下代码模拟重复添加通知的情况：
+```Objective-C
+for (int i = 0; i < 3; i++) {
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object:nil];
+}
+```
+该代码导致的结果是，**响应通知回调会走三次**。
+
+可能有人会问，为什么系统库没有做个重复添加的判断？当然，这可能是为了让我们更灵活的运用，也可能是对时间复杂度的一种妥协吧😁。
+
+有过比较长开发经验的同学应该都有过，没有及时的移除通知而导致意外崩溃的情况。前面也说过，==通知中心对响应者`observer`是使用unsafe_unretained修饰==，当响应者释放会出现野指针，如果向野指针发送消息造成崩溃。在iOS8系统之后（更早版本没有测试），`[NSNotificationCenter defaultCenter]`会在响应者`observer`调用`-dealloc`方法的时候执行`-removeObserver:`方法。
+
+对于这一点，可以做个实验：
+新建一个`NSNotificationCenter`的分类，代码如下：
+```Objective-C
+@implementation NSNotificationCenter (YB)
++ (void)load {
+    Method origin = class_getInstanceMethod([self class], @selector(removeObserver:));
+    Method current = class_getInstanceMethod([self class], @selector(_removeObserver:));
+    method_exchangeImplementations(origin, current);
+}
+- (void)_removeObserver:(id)observer {
+    NSLog(@"调用移除通知方法: %@", observer);
+//    [self _removeObserver:observer];
+}
+@end
+```
+
+然后新建一个类正常的使用通知，但是请不要手动在`-dealloc`中释放通知（我们要做实验）。然后我们释放掉这个类（可以使用控制器present、dismiss）：
+```xml
+调用移除通知方法: <Test_VC: 0x7f9a0a4d9240>
+```
+
+神奇的现象发生了，通过比较内存地址，`[NSNotificationCenter defaultCenter]`确实是调用了`removeObserver :`方法移除对应响应者的通知监听。
+
+注意上面的代码中，我们将`[self _removeObserver:observer];`注释掉了，意味着该方法已经被我截取了，我们再向该“移除通知未遂”的响应者`observer`发送通知，直接崩溃。当去除注释，正常运行，无需手动移除。
+
+**结论：如果iOS支持版本在iOS8以上，多数情况理论上可以不用移除通知，但是由于历史遗留、开发者习惯等因素，看个人喜好了。**
