@@ -1,0 +1,181 @@
+# LazyVStack vs VStack：深度对比与缓存机制解析
+
+> 容器停止后 UI 状态不刷新，逐层排查后定位到 LazyVStack 的视图缓存复用机制。
+
+---
+
+## 一、核心差异一览
+
+| 特性 | VStack | LazyVStack |
+|------|--------|------------|
+| 视图创建时机 | **一次性**创建所有子视图 | **按需**创建，进入可视区域时才求值 |
+| 内存占用 | 所有子视图常驻内存 | 仅可视区域附近的视图在内存中 |
+| 视图缓存/复用 | 无缓存，状态变化即重新求值 | 按 `Identifiable.id` 缓存，可能复用旧视图 |
+| 视图销毁 | 父视图销毁时统一销毁 | 滚出可视区域后**可能**被回收 |
+| 适用规模 | 小列表（< 100 项） | 大列表（数百 ~ 数万项） |
+| 滚动性能 | 列表极长时初始化慢 | 始终流畅，按需加载 |
+
+---
+
+## 二、LazyVStack 的性能优化机制
+
+### 2.1 延迟求值（Deferred Evaluation）
+
+```swift
+LazyVStack {
+    ForEach(items) { item in
+        RowView(item: item) // 只有滚动到附近时才会被求值
+    }
+}
+```
+
+LazyVStack 不会在布局阶段对所有子视图调用 `body`，而是维护一个"需要渲染的索引范围"，仅对该范围内的元素执行视图构建。这是其处理大数据集时保持流畅的根本原因。
+
+### 2.2 基于 Identifiable.id 的视图缓存
+
+这是 LazyVStack 最关键也最容易引发 Bug 的机制：
+
+1. **首次出现**：元素进入可视区域 → 根据 `Identifiable.id` 创建视图 → 缓存
+2. **再次出现**：相同 `id` 的元素进入可视区域 → **复用缓存视图**，而非重新求值
+3. **更新判断**：通过 `Equatable` 对比决定是否需要重新渲染已缓存的视图
+
+### 2.3 更新判断流程
+
+```
+元素出现在可视区域
+    │
+    ▼
+是否存在该 id 的缓存视图？
+    ├─ 否 → 创建新视图，加入缓存
+    └─ 是 → Equatable 对比（old == new）
+              ├─ true  → 跳过渲染，直接复用
+              └─ false → 重新求值 body
+```
+
+---
+
+## 三、缓存机制引发的典型问题
+
+### 3.1 问题场景：跨 ForEach 移动元素
+
+```swift
+LazyVStack {
+    // Section 1: Running
+    ForEach(runningContainers) { container in
+        ContainerRow(container: container)
+    }
+    // Section 2: Stopped
+    ForEach(stoppedContainers) { container in
+        ContainerRow(container: container)
+    }
+}
+```
+
+当一个容器从 `runningContainers` 移动到 `stoppedContainers` 时：
+
+1. 该 `id` 从第一个 ForEach 消失
+2. 同一个 `id` 在第二个 ForEach 出现
+3. LazyVStack 发现**该 id 已有缓存视图** → 直接复用
+4. 如果 Equatable 判断不充分 → **旧状态的 UI 被原封不动地展示**
+
+**外在表现**：数据层已正确更新，但 UI 仍显示 loading 动画。切换 Tab 再切回来后恢复正常（因为整棵视图树被销毁重建，缓存清空）。
+
+### 3.2 为什么 VStack 不会有这个问题？
+
+VStack 没有缓存机制。每次状态变化触发重新求值时，所有子视图都会重新执行 `body`，不存在"复用旧视图"的可能。
+
+---
+
+## 四、防御策略
+
+### 策略 1：确保 Equatable 覆盖所有 UI 相关状态
+
+```swift
+struct ContainerViewModel: Identifiable, Equatable {
+    let id: String
+    var state: ContainerState
+    var isTransitioning: Bool
+
+    // ✅ 比较所有影响 UI 的字段
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.state == rhs.state &&
+        lhs.isTransitioning == rhs.isTransitioning
+    }
+}
+```
+
+> **常见陷阱**：`==` 只比较 `id`，导致 SwiftUI 认为元素没有变化，跳过重渲染。
+
+### 策略 2：将所有 UI 状态内聚到模型中
+
+```swift
+// ❌ 外部参数传递——ForEach 感知不到变化
+ContainerRow(
+    container: container,
+    isTransitioning: viewModel.transitioningIDs.contains(container.id)
+)
+
+// ✅ 状态内嵌到模型——ForEach 通过 Equatable 感知变化
+ContainerRow(container: container) // isTransitioning 已是 container 的属性
+```
+
+ForEach 的更新判断基于**元素本身的 Equatable**，外部传入的参数变化不在其检测范围内。
+
+### 策略 3：小列表直接用 VStack
+
+```swift
+// 容器数量通常 < 100，VStack 完全胜任
+VStack {
+    ForEach(runningContainers) { container in
+        ContainerRow(container: container)
+    }
+    ForEach(stoppedContainers) { container in
+        ContainerRow(container: container)
+    }
+}
+```
+
+### 策略 4：强制视图重建（保留 LazyVStack 时的替代方案）
+
+```swift
+LazyVStack {
+    ForEach(containers) { container in
+        ContainerRow(container: container)
+            .id("\(container.id)_\(container.state)_\(container.isTransitioning)")
+            // id 变化 → 缓存失效 → 强制重建
+    }
+}
+```
+
+> ⚠️ 这会导致视图销毁重建而非更新，失去动画过渡效果，且有额外性能开销。仅在必要时使用。
+
+---
+
+## 五、选型决策树
+
+```
+列表规模？
+  ├─ < 100 项 → 直接用 VStack，简单可靠
+  ├─ 100 ~ 1000 项 → LazyVStack，但需严格保证 Equatable 正确性
+  └─ > 1000 项 → LazyVStack + 必要时用 .id() 强制刷新
+  
+是否存在跨 Section/ForEach 的元素移动？
+  ├─ 是 → 优先考虑 VStack；若必须 Lazy，确保 Equatable 完整 + 测试缓存行为
+  └─ 否 → LazyVStack 安全使用
+```
+
+---
+
+## 六、总结
+
+当遇到以下现象时，优先排查 LazyVStack 的视图缓存问题：
+
+- 数据已正确更新，但 UI 不刷新
+- 切换页面/Tab 再切回来后恢复正常
+- 同一元素在不同 Section 之间移动时出现 UI 残留
+
+排查顺序：
+1. `Equatable` 是否覆盖了所有 UI 相关字段？
+2. 影响 UI 的状态是否都内聚在模型中（而非外部参数）？
+3. 是否存在跨 ForEach 的元素移动 + LazyVStack 缓存复用？
