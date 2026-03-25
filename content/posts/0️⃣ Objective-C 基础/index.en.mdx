@@ -1,0 +1,1041 @@
+# 0️⃣ Objective-C Foundation
+
+#### 1. Comparison of method parameters and member variables in Obj-C & Java & Swift
+
+Reference source:
+
+Https://www.yigegongjiang.com/2019/SwiftStruct/
+
+Https://chat.deepseek.com/a/chat/s/b0a7d0d8-a81e-4538-9ea0-8bb8ac72f416
+
+##### 1.1 Differences in value types & reference types
+
+###### 1.1.1 Value Type & Reference Type
+
+- **Value type**: Each instance holds a copy of the data, and the copy is unique for each instance;
+
+- **Reference type**: The instance of this type is the only copy of shared data (at the native level, that is, each instance of this type points to == the same address == in memory), for example, class is the most typical reference type.
+
+###### 1.1.2 Java
+
+###### 1.1.3 Objective-C
+
+###### 1.1.4 Special Swift
+
+---
+
+#### 2. Dynamic type and dynamic binding
+
+##### 2.1 Dynamic binding and id data types
+
+- **id type**: == is a dynamic type, a general object type ==, == can point to any Objective-C object, which can be used to store objects belonging to any class ==. You can use it to point to an instance of any class (such as `NSString`, `NSArray` or custom class), but you need to ** ensure that the object can respond to the called method** when running, otherwise it will crash.
+
+Https://chat.deepseek.com/a/chat/s/77092b14-4720-49e9-bfff-9a85469528d3
+
+- **Obj-C system always tracks the class to which the object belongs**: first determine the class of the object, and then == at run == to determine the method that needs to be called dynamically, not at the time of compilation.
+
+##### 2.2 Compilation time and runtime check
+
+- Because the objects stored in the id variable cannot be determined at the time of compilation, some == tests are postponed to runtime ==. That is to say, postpone it until the program is executed.
+
+- Consider the following codes:
+
+``` Objective-C
+
+Fraction *f1 = [[Fraction alloc] init]; // Initialize a fraction object
+
+[F1 setReal: 10.0 andImaginary: 2.5]; // Set a plural
+
+```
+
+This method is applied to the Complex class, and there is no corresponding `setReal: andImaginary:` method in the Fraction class. When compiling a program containing these statements, the following information will be displayed:
+
+`'Fraction' may not respond to 'setReal:andImaginary:'`
+
+- Objective-C compiler knows that `f1` is a Fraction object because it is declared in this way. The compiler also knows that when the message expression `[f1 setReal: 10.0 andImaginary: 2.5];` is encountered, the Fraction class does not contain the `setReal:andImaginary:` method (and does not inherit the method), so it will generate the warning message shown above.
+
+- Consider the following codes:
+
+```Objective-C
+
+Id *data = [[Fraction alloc] init]; // Initialize a fractional object, but id type
+
+[Data setReal: 10.0 andImaginary: 2.5]; // Set a plural
+
+```
+
+When these lines of code are compiled, the compiler will not generate a warning message. This is because == the compiler does not know the object type stored in the data == when processing the source file (that is, the compiler does not know that the Fraction object has already existed in this variable).
+
+- **The program will not crash until the program containing these lines of code is running**, and the following error will appear:
+
+`- [Fraction setReal:andImaginary:]: unrecognized selector sent to instance 0x103f00`
+
+- When the program is running, the system first checks the type of object stored in the data. Because Fraction is stored in data, the ==runtime system checks and finds the ==`setReal:andImaginary:` method defined in the Fraction class. Because this method was not found, the previous error message was displayed and the running of the program was terminated.
+
+##### 2.3 id data types and static types
+
+- When defining a variable as an object of a specific class, == uses a static type ==. == "Static" refers to the explicit declaration of the type of object stored in the variable ==. In this way, the class of the object stored in this form is **predefined**, that is, static. When using static types, the compiler ensures that the usage of variables is always consistent in the program as much as possible. The compiler can determine whether the method applied to the object is defined by the class or inherited by the class by checking, otherwise a warning message will be displayed.
+
+**Note**: The method on the call object can also be used as a variable by specifying the name of the method. In this case, the compiler cannot check your method parameters or return types.
+
+- About the necessity of static types: it can better point out errors at the program compilation stage than at runtime. If it is left until the runtime, even we may not be there when the error occurs. If the program is put into the production environment, some unlucky users will unexpectedly find that a specific object cannot recognize a certain method when running the program, which will cause the program to crash.
+
+- Another reason for using static types can improve program readability and code maintainability.
+
+**Note**: Do not use point operators for id variables, otherwise the compiler will report an error.
+
+---
+
+#### 3. NSString & NSMutableString
+
+![]( NSstring&NSMutableString.jpg)
+
+---
+
+#### 4. Object initialization
+
+- "Standard Template" for overloading the init method:
+
+```Objective-C
+
+- (instancetype) init {
+
+Self = [super init];
+
+If (self) {
+
+// Initialize code
+
+}
+
+Return self;
+
+}
+
+```
+
+- This method will first call the initialization method of the parent class. Execute the initialization method of the parent class so that the inherited instance variables can be initialized normally;
+
+- The execution result of the parent init method must be assigned to self, because the initialization process changes the position of the object in memory (that is, the reference will be changed);
+
+- If the initialization process of the parent class is successful, the returned value will be non-empty and verified by the if statement. The annotation indicates that the custom initialization code can be put in the position of this code block. Instance variables can usually be created and initialized at this location.
+
+---
+
+#### five. Obj-C typedef & Swift typealias
+
+In Objective-C and Swift, the core purpose of `typedef` and `typealias` is similar, both of which are defining aliases for existing types to improve code readability and simplify the declaration of complex types, but they have some differences in function and flexibility. The following is a detailed comparison:
+
+##### **Common points**
+
+1. **Basic alias function**
+
+- `typedef` of **Objective-C** and `typealias` of **Swift** can define aliases for existing types (basic types, structures, classes, etc.).
+
+- For example:
+
+```Objective-C
+
+// Objective-C
+
+Typedef int MyInt;
+
+Typedef void (^CompletionBlock)(void);
+
+```
+
+````swift
+
+// Swift
+
+Typealias MyInt = Int
+
+Typealias CompletionBlock = () -> Void
+
+```
+
+Note: `^` means that this is a **[[##^439e1a|Block type]]**, similar to a function pointer, but more powerful (can capture context variables).
+
+Https://chat.deepseek.com/a/chat/s/78353455-f302-481a-912c-65e369c1902f
+
+##### **Difference**
+
+1. **General support**
+
+- **Swift**'s `typealias` can directly support generic aliases, and even ** partially specify generic parameters**:
+
+````swift
+
+Typealias StringDictionary<T> = Dictionary<String, T>
+
+Typealias IntArray = Array<Int>
+
+```
+
+- **Objective-C**'s `typedef` does not support generic parameterization. Although Objective-C has lightweight generics (such as `NSArray<NSString *>`), generic alias cannot be created through `typedef`.
+
+2. **Agreement combination**
+
+- **Swift**'s `typealias` can be used to combine multiple protocols or add protocol constraints to the type:
+
+````swift
+
+Protocol A {}
+
+Protocol B {}
+
+Typealias ABProtocol = A & B // Follow the protocol combination of A and B at the same time
+
+Typealias ViewWithAB = UIView & A & B // Combination of types and protocols
+
+```
+
+- The `typedef` of **Objective-C** cannot realize the protocol combination (the protocol of Objective-C itself supports the combination syntax `id<ProtocolA, ProtocolB>`, but cannot be simplified by the alias `typedef`).
+
+3. **Associated Type**
+
+- In the **Swift** protocol, `typealias` can be used as an alternative to association types (such as simplifying the implementation of generic protocols):
+
+````swift
+
+Protocol container{
+
+Associated type item
+
+Func add(_ item: Item)
+
+}
+
+Class IntContainer: Container {
+
+Typealias Item = Int // Implement the associated type
+
+Func add(_ item: Int) { ... }
+
+}
+
+```
+
+- **Objective-C** has no similar functions, because its generic and protocol system are relatively simple.
+
+4. **Scape and expandability**
+
+- **Swift**'s `typealias` can be defined in global, class, structure, enumeration and even within the protocol, which is more flexible.
+
+- The `typedef` of **Objective-C** is usually global or defined in the header file, and the scope control is weak.
+
+##### **Summary**
+
+| Characteristics | Objective-C `typedef` | Swift `typealias` |
+
+|--------------------|-----------------------------|--------------------------------|
+
+| **Basic type alias** | ✅ | ✅ |
+
+| **CLOSER/FUNCTUAL POINTER ALIAS** | ✅ | ✅ |
+
+| ** generic alias** | ❌ | ✅ (support parameterization) |
+
+| **Protocol combination** | ❌ | ✅ |
+
+| **Association type** | ❌ | ✅(in the agreement) |
+
+| **Scope flexibility** | Weak | Strong (groball, internal type, extension, etc.) |
+
+##### **Applicable scenario**
+
+- **Objective-C `typedef`**: The name suitable for simplifying the base type, structure, enumeration or closure type.
+
+- **Swift `typealias`**: In addition to the basic alias, it can also be used for protocol combination, generic optimization and protocol design, which is a more modern and feature-rich tool.
+
+If you need to migrate Objective-C's `typedef` in Swift, you can directly replace it with `typealias` in most cases, but Swift's aliases are more flexible and powerful.
+
+---
+
+#### 6. Classification and agreement
+
+##### 6.1 Classification
+
+- **Category**: == The definition of the class can be modularized into the group or classification of the relevant method ==, and provides an easy way to extend the existing class definition, and there is no need to access the source code of the class or create subclasses.
+
+Fraction.h:
+
+```Objective-C
+
+@Interface Fraction: NSObject
+
+@Property int numerator, denominator;
+
++ (Fraction *) allocF;
+
+Plus (int) count;
+
+- (Fraction *) initWith: (int) n over: (int) d;
+
+- (void) print;
+
+- (void) setNumerator: (int) n;
+
+- (void) setDenominator: (int) d;
+
+- (int) adjustNumerator: (int) offset;
+
+-(Int) getNumerator;
+
+- (void) setTo: (int) n over: (int) d;
+
+- (void) seet: (int) n : (int) d;
+
+-(Void) reduce;
+
+@End
+
+// Classification Category
+
+@Interface Fraction (MathOps)
+
+-(Fraction*) add: (Fraction*) f;
+
+- (Fraction *) sub: (Fraction *) f;
+
+-(Fraction *) mul: (Fraction *) f;
+
+- (Fraction *) div: (Fraction *) f;
+
+@End
+
+```
+
+Fraction.m:
+
+``` Objective-C
+
+#Import "fraction.h"
+
+@Implementation Fraction
+
+@Synthesize numerator, denominator;
+
+// Overloading alloc is not a good programming practice, because this method handles the physical allocation of memory.
+
++ (Fraction *) allocF {
+
+Extern int gCounter;
+
+++gCounter;
+
+Return [fraction alloc];
+
+}
+
++ (int) count {
+
+Extern int gCounter;
+
+Return gCounter;
+
+}
+
+- (Fraction *) initWith: (int) n over: (int) d {
+
+Self = [super init];
+
+If (self) {
+
+[Self setTo:n over:d];
+
+}
+
+Return self;
+
+}
+
+- (void) print {
+
+Int x = numerator ?: -1;
+
+NSLog(@"The fraction is %i / %i, x = %i", numerator, denominator, x);
+
+}
+
+- (int)adjustNumerator: (int) offset {
+
+Return numerator + offset;
+
+}
+
+-(int)getNumerator{
+
+Return number;
+
+}
+
+- (void) setTo: (int)n over:(int)d {
+
+Numerator=n;
+
+Denominator=d;
+
+}
+
+- (void) seet: (int) n : (int) d {
+
+Numerator=n;
+
+Denominator=d;
+
+}
+
+-(Void)reduce {
+
+Int u=numerator;
+
+Int v = denominator;
+
+Int temp;
+
+While (v! Equal to zero){
+
+Temp=u%v;
+
+U=v;
+
+V=temp;
+
+}
+
+Numerator /= u;
+
+Denominator /= u;
+
+}
+
+@End
+
+// Classification Category
+
+@Implementation Fraction (MathOps)
+
+-(Fraction *)add:(nonnull Fraction *) f {
+
+// a/b + c/d = (a*d + b*c) / (b*d)
+
+Fraction *result = [[Fraction alloc] init];
+
+Result.numerator=numerator*f.denominator+denominator+f.numerator;
+
+Result.denominator=denominator*f.denominator;
+
+[Self reduce];
+
+Return result;
+
+}
+
+-(Fraction *)sub:(nonnull Fraction *) f {
+
+Fraction *result = [[Fraction alloc] init];
+
+Result.numerator = numerator * f.denominator - denominator + f.numerator;
+
+Result.denominator=denominator*f.denominator;
+
+[Self reduce];
+
+Return result;
+
+}
+
+- (Fraction *)mul:(nonnull Fraction *) f {
+
+Fraction *result = [[Fraction alloc] init];
+
+Result.numerator = (numerator * f.denominator) * (denominator + f.numerator);
+
+Result.denominator=denominator*f.denominator;
+
+[Self reduce];
+
+Return result;
+
+}
+
+-(Fraction *)div:(nonnull Fraction *) f {
+
+Fraction *result = [[Fraction alloc] init];
+
+Result.numerator = (numerator * f.denominator) / (denominator + f.numerator);
+
+Result.denominator=denominator*f.denominator;
+
+[Self reduce];
+
+Return result;
+
+}
+
+@End
+
+```
+
+**Note**: As usual, the basic names of .h and .m files as classifications are the names classified immediately after the name of the class. For example, we name the file name of the classified interface part as FractionMathOps.h, and the implementation part as FractionMathOps.m. Some programmers use the symbol "+" to divide the names of classes and classifications, such as Fraction+MathOps.h.
+
+##### 6.2-class extension
+
+- There is a special situation to create an unnamed classification without specifying the name between the brackets "( ). This special syntactic definition is called the extension of == class ==, also known as == anonymous classification ==. When defining such an unnamed classification, the class can be extended by defining additional instance variables and attributes (which is not allowed in named classifications). **The method in the unnamed classification needs to be implemented in the main implementation area**, not the separate implementation area.
+
+- Unnamed classification methods are all ==private ==. ( Methods are not registered in the interface part, so they are private in this sense. However, if you know the name of the private method, you can also call it.)
+
+```Objective-C
+
+@Interface ClassName ()
+
+@End
+
+```
+
+##### 6.3 Classification Notes
+
+- Classification can rewrite another method in the class, but it is not recommended. Because 1️⃣ After rewriting a method, the original method can no longer be accessed, and it is necessary to ensure that the original functions are copied to the rewrite method; 2️⃣ If you really want to rewrite, it may be more appropriate to create a subclass. If you want to rewrite the method in the subclass, you can still refer to the method of the parent class by sending a message to super;
+
+- You can set many classifications for a class, as long as you follow the rules. If a method appears in multiple classifications, the statement will not specify the use of that classification;
+
+- Extending the class by adding new methods using classification will not only affect this class, but also == affect all its subclasses ==;
+
+- Object/classification naming still needs to be unique;
+
+- Classification can only add methods;
+
+- Private attributes (@implementation of this class) cannot be accessed, because private attributes are not visible to the classification at the time of compilation. But self can be used, because `self` is the instance object of the current class, and the method in the classification is essentially a part of the class, so the **public method** of the class (including attributes and methods) can be called through `self`;
+
+- Give priority to calling the method of the same name of the classification.
+
+##### 6.4 Agreement
+
+- Comparison with the swift protocol:
+
+Https://chat.deepseek.com/a/chat/s/7793c366-55a6-436e-8fa1-5945a2444903
+
+- == The protocol is a list of methods shared by multiple classes. == The methods listed in the agreement are not implemented accordingly, and it is planned that others will implement them. And the protocol provides a way to define a set of methods with certain relevance with the specified name. These methods usually have documentation instructions, and if necessary, they can be implemented in their own class definitions.
+
+- The protocol lists a set of methods, some of which are optional and some of which must be implemented. If it is decided to implement all the methods of a specific agreement, it also means that the agreement must be confirmed or adopted. It can be defined that all methods in the protocol must be implemented, or they can be optionally implemented.
+
+- The following is the way to define the NSCopying protocol in the standard Foundation header file NSObject.h:
+
+NSObject.h:
+
+```Objective-C
+
+@Protocol NSCopying
+
+- (id) copyWithZone: (NSZone *)zone;
+
+@End
+
+```
+
+- If your class uses the NSCopying protocol, then **the method called `copyWithZone:` must be implemented**.
+
+- Inform the compiler of the syntax of the protocol to be adopted: the protocol name is placed after the class name and its parent class name, and the statement is as follows:
+
+```Objective-C
+
+@Interface AddressBook: NSObject < NSCopying, NSCoding >
+
+```
+
+- This shows that AddressBook is an "object with the parent class NSObject" and complies with the NSCopying protocol.
+
+- When using, there is no need to declare internal methods in the interface section, because the system already knows, but these methods need to be defined in the implementation section.
+
+- The agreement is ==classless==, which does not refer to any class, and any class can comply with a certain agreement.
+
+- There is the following code:
+
+```Objective-C
+
+@Protocol Drawing
+
+- (void) paint;
+
+- (void) erase;
+
+@Optional
+
+- (void) outline;
+
+@End
+
+```
+
+- 1️⃣ Use `conformsToProtocol:` to check whether an object follows a protocol. For example, if you have an object called currentObject and want to see if it follows the Drawing protocol, you can send a drawing message to it. The code is as follows:
+
+```Objective-C
+
+Id currentObject;
+
+//...
+
+If ([currentObject conformsToProtocol: @protocol (Drawing)] == YES) {
+
+// Send paint, erase, or outline messages to currentObject
+
+//...
+
+}
+
+```
+
+- The dedicated `@protocol` instruction used here is used to obtain a protocol name and generate a Protocol object. The `conformsToProtocol:` method expects this object as its parameter.
+
+- 2️⃣ In order to test whether currentObject has implemented the optional outline method, you can have the following code:
+
+```Objective-C
+
+If ([currentObject respondsToSelector: @selector (outline)] == YES) {
+
+[currentObject outline];
+
+}
+
+```
+
+- 3️⃣ Check the consistency of variables with the help of the compiler by adding the protocol name in the spike brackets after the type name. The statement is as follows:
+
+```Objective-C
+
+Id <Drawing> currentObject;
+
+```
+
+- Inform the compiler that currentObject will contain objects that comply with the Drawing protocol. If an object of static type is assigned to currentObject, which does not comply with the Drawing protocol, the compiler will issue a warning message: `warning: class 'square' does not implement the 'Drawing' protocol`
+
+There is a compiler check here, so assigning an id variable to currentObject will not generate this message, because the compiler cannot know whether the object stored in the id variable complies with the Drawing protocol.
+
+- 4️⃣ When defining a protocol, you can also extend the existing protocol:
+
+```Objective-C
+
+@Protocol Drawing3D <Drawing>
+
+```
+
+- It shows that the Drawing3D protocol also adopts the Drawing protocol. Therefore, any class that adopts the Drawing3D protocol must implement the methods listed in this agreement and the methods of the Drawing protocol.
+
+- A protocol can also be adopted for classification:
+
+```Objective-C
+
+@Interface Fraction (Stuff) <NSCopying, NSCoding>
+
+```
+
+- Here, Fraction has a classification Stuff, using NSCopying and NSCoding protocols.
+
+- If you no longer want to declare that your class conforms to a specific protocol in the .h file, you can write the protocol in the .m file like a classification extension:
+
+```Objective-C
+
+@Interface ProfilePreviewController() <NavigationBarAdjustments>
+
+//...
+
+@End
+
+```
+
+- Like the class name, the name of the protocol must also be unique.
+
+#### 6.5 Agent (?)
+
+- Proxy is also == an interface definition between two classes ==, which refers to the reaction that one object provides an opportunity to change the behavior in another object. The basic idea is: == Two objects work together to solve problems, which is usually used for communication between objects ==.
+
+- The basic characteristics of the proxy design mode:
+
+- It simplifies the behavior of objects and minimizes the coupling between objects;
+
+- Using proxy, generally speaking, there is no need for subclassification;
+
+- It simplifies our application development, which is both easy to implement and flexible.
+
+- For example:
+
+Https://www.cnblogs.com/cokecoffe/archive/2012/05/05/2537109.html
+
+Purpose: Entrust A's work to B
+
+Step 1. Declare the agreement in A, that is, the things to be entrusted (method);
+
+Step 2. Declare a entrusted object in A, that is, who should be entrusted to do it, use id <agree name> to entrust the object name;
+
+Step 3. For example, if you want B to do A's thing, then B's interface should declare that he follows the agreement formulated in A;
+
+Step 4. A calls the commission to execute that thing. That is `[delegate fun]`.
+
+-A.h
+
+```Objective-C
+
+@Protocol Mydelegate // Protocol Statement
+
+- (void) fun;
+
+@End
+
+@Interface A: NSObject {
+
+// Declare a delegated object, and we need to entrust things to the class that implements the Mydelegate protocol.
+
+Id <Mydelegate> delegate;
+
+}
+
+@Property(assign,nonatomic) id <Mydelegate> delegate;
+
+@End
+
+```
+
+-A.m
+
+```Objective-C
+
+@Implementation
+
+- (void) init {
+
+delegate=B;
+
+}
+
+- (void) FunToOther {
+
+[Delegate Fun]; // Send the message to the delegate for processing
+
+}
+
+@End
+
+```
+
+- Realization of the entrusted object:
+
+-B.h
+
+```Objective-C
+
+#Import "A.h"
+
+@Interface B: NSObject<MyDelegate>
+
+@End
+
+```
+
+-B.m
+
+```Objective-C
+
+@Implementation
+
+- (void) fun {
+
+//Realize the method formulated in Mydelegate
+
+}
+
+@End
+
+```
+
+##### 6.6 Informal Agreement
+
+- Informal agreement: essentially a classification, listing a set of methods, but **not implementing these methods**. Everyone (or almost everyone) inherits the same root object. Therefore, == informal classification is usually defined for the root class ==. Sometimes, informal agreements are also called abstract agreements.
+
+- The class that declares the informal protocol does not implement these methods itself, and the subclass that chooses to implement these methods needs to re-declare these methods in its interface part, and also implement one or more of these methods. Unlike formal protocols, compilers do not provide help with informal protocols. - There is no concept of compliance with protocols or testing by compilers.
+
+- If an object adopts a formal agreement, it must comply with all the information in the agreement. This can be enforced during operation and compilation. If an object adopts an informal agreement, it may not need to adopt all the methods of this agreement (depending on the agreement). You can enforce compliance with an informal protocol at runtime (with `respondsToSelector:`), but not at compile time.
+
+- Note: The `@optional` instruction has been added to the Objective-C 2.0 language to replace the use of informal protocols. We can see that several UIKit classes are used in this way.
+
+##### 6.7 Synthetic Objects (Combination vs Inheritance)
+
+- There is such a class that contains one or more objects of other classes. The object of this new class is == composite ==, because it is composed of other objects.
+
+For example, for the Square class, it is natural to define this class as a subclass of Rectangle, because a square is an equilateral rectangle. When defining a subclass, it inherits all the instance variables and methods of the parent class. But in some cases, this practice is not good - because ** some methods defined in the parent class may not be suitable for subclass use **. The Square class inherits the `setWidth:andHeight:` method of Rectangle to set the width and height, but it is not applicable to Square (although it can work normally). In addition, when creating subclasses, it is necessary to ensure that all inherited methods can work properly, because users of this class may access them. In the end, the subclass depends on the parent class, and changing the parent class may prevent the methods in the subclass from working properly.
+
+As an alternative to creating subclasses, a new class can be defined, which contains the instance variables to be extended to the class. Then, just define the method suitable for the class in the new class. Return the example of Square. The following is another definition of the Square class:
+
+```Objective-C
+
+@Interface Square: NSObject {
+
+Rectangle *rect;
+
+}
+
+-(Int) setSide: (int)s;
+
+-(Int) side;
+
+-(Int) area;
+
+-(Int) perimeter;
+
+@End
+
+@Interface Rectangle: NSObject
+
+@Property int width, height;
+
+- (void) setWidth: (int) w andHeight: (int) h;
+
+- (int) area;
+
+- (int) perimeter;
+
+@End
+
+```
+
+The Square class defined here has 4 methods. Unlike the subclass version, the subclass version allows you to directly access the methods of Rectangle (`setWidth:andHeight:`, etc.). At the same time, the definition of Square does not include these, and it is not suitable for methods directly applied to Square.
+
+If Square is defined in this way, you need to allocate storage space for the rectangle it contains. If the method is not rewritten, the following statement
+
+```Objective-C
+
+Square *mySquare = [[Square alloc] init];
+
+```
+
+A new Square object will be assigned, but no storage space will be allocated for the Rectangle object rect stored in the instance variable (here means that the ==`rect` pointer does not point to any valid `Rectangle` instance (not the pointer itself is not allocated) ==). Therefore, it may be necessary to rewrite `init` or add new methods such as `initWithSide:` to allocate space and set its edges accordingly.
+
+When defining methods in the Square class, you can also use the method of Rectangle:
+
+```Objective-C
+
+//Square.m
+
+@Implementation Square
+
+- (instancetype)init {
+
+Self = [super init];
+
+If (self) {
+
+Rect = [[Rectangle alloc] init]; // explicitly allocate memory
+
+}
+
+Return self;
+
+}
+
+-(Int) area {
+
+Return [rect area];
+
+}
+
+@End
+
+```
+
+- **Inheritance and combination, the difference in memory allocation:**
+
+- **Inheritance**:
+
+As a subclass of `Rectangle`, `Square` inherits its `width` and `height` variables. When creating a `Square` instance, the storage space of the parent class `Rectangle` ** is automatically included in the subclass ** without additional allocation.
+
+- **Combination**:
+
+`Square`== only holds the pointer `rect`== of `Rectangle`, and must == manually manage the life cycle of `rect`==. If memory is not allocated at the time of initialization, `rect` will not be available.
+
+- ==**The combination mode requires explicit management of the memory of member objects**==, which is a core difference compared with inheritance.
+
+---
+
+#### 7. SEL type
+
+^21f94f
+
+`SEL` is an alias of ==`objc_selector` structure ==, representing the "selector" of the method. == It is essentially a **unique identifier**==, generated by the method name, and is used to quickly find the method at runtime.
+
+---
+
+#### 8. Blocks (Blocks)
+
+^439e1a
+
+Block is an extension of C language. It is not defined as a part of the standard ANSI C, but is added to the language by Apple. The block looks more like a function. Parameters can be passed to the block, just like to the function; and the block also has a return value. Unlike functions, == blocks are defined inside the function or method, and can access any variable within the scope of the function or method and outside the block ==. Generally speaking, == these variables can be accessed but cannot change the value of these variables ==.
+
+There is a special modifier (composed of characters with two underscores in front of the block) that can modify the values of variables in the block.
+
+Blocks can == pass to functions or methods as parameters ==, and one of the advantages of blocks is that == can allow the system to execute other threads assigned to other processors or applications ==.
+
+For example, about this `printMessage:` function:
+
+```Objective-C
+
+Void printMessage (void){
+
+NSLog(@"Programming is fun.");
+
+}
+
+```
+
+Such a Block can also complete the same task:
+
+```Objective-C
+
+^(void){
+
+NSLog(@"Programming is fun.");
+
+}
+
+```
+
+The block is marked with the beginning of the inserted character `^`. The following parentheses indicate the list of parameters required by the block. In this example, the block has no parameters, so you only need to fill in void in the function definition.
+
+Similarly, this block can also be assigned to a variable called `printMessage`, as long as the variable is declared correctly:
+
+```Objective-C
+
+Void (^printMessage) (void) =
+
+^(void){
+
+NSLog(@"Programming is fun.");
+
+}
+
+```
+
+The left side of the equal sign indicates that `printMessage` points to a block pointer without parameters and return values. ** It should be noted that the assignment statement is terminated by a semicolon. **
+
+Execute a block referenced by a variable, which is consistent with the call method of the function:
+
+```Objective-C
+
+Print message();
+
+```
+
+Blocks can access variables defined within its scope. The value of the variable is also the value defined in the block, as follows:
+
+```Objective-C
+
+#Import <Foundation/Foundation.h>
+
+Int main (int argc, char *argv[]){
+
+@Autoreleasepool{
+
+Int foo = 10;
+
+Void (^printFoo) (void) =
+
+^(void){
+
+NSLog(@"foo = %i", foo);
+
+};
+
+Foo=15;
+
+Printfoo();
+
+}
+
+Return zero;
+
+}
+
+```
+
+Output:
+
+```
+
+Foo=10
+
+```
+
+Block printFoo can access the value of the local variable foo. == Note that the value of foo shows 10, not 15. This is because the variable foo already has a value at the same time as **defining the block**, not when the block is executed. ==
+
+==The value of the defined variable cannot be modified inside the block==. Therefore, if you try to change the value of foo inside the block, you will get an error message prompted by the compiler: assign a value to the read-only variable "foo".
+
+```Objective-C
+
+#Import <Foundation/Foundation.h>
+
+Int main (int argc, char *argv[]){
+
+@Autoreleasepool{
+
+Int foo = 10;
+
+Void (^printFoo) (void) =
+
+^(void){
+
+NSLog(@"in block: foo = %i", foo);
+
+Foo = 20; // ** This line will generate compilation errors
+
+};
+
+Foo=15;
+
+Printfoo();
+
+NSLog(@"out of block: foo = %i", foo);
+
+}
+
+Return zero;
+
+}
+
+```
+
+If you insert the `__block` modifier before defining the local variable foo:
+
+```Objective-C
+
+__Block int foo = 10;
+
+```
+
+Run the program, and you will get two output statements:
+
+```
+
+In block: foo = 15
+
+Out of block: foo = 20
+
+```
+
+The first line shows the value of foo when calling the block, and the second line verifies whether the foo value can be changed to 20 in the block.
+
+##### 8.1 About `__block` modifiers
+
+In Objective-C, using the `__block` modifier will change the way the block captures external variables, so that the modification of variables inside and outside the block can be synchronized. Specifically:
+
+1. **Default behavior (no `__block` modifier)**:
+
+- The block will capture the **instantaneous value** (value copy) of the external variable, and the subsequent modification of the external variable will not affect the value inside the block.
+
+- As in the example, `foo` is changed to 15 after the block is defined, but the block still outputs the value of 10 at the time of definition.
+
+2. **Use `__block` modifier**:
+
+- Variables will be captured by **reference** instead, and the same storage location will be shared inside and outside the block.
+
+- What is accessed in the block is the **real-time value** of the variable, not the snapshot at the time of definition.
+
+- At this time, if the block is called after externally modifying the variable, the block will use the latest value.
