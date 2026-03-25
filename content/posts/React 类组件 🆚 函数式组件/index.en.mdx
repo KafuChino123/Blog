@@ -1,0 +1,199 @@
+# React class components 🆚 Functional components
+
+### The difference between function components and class components
+
+#### 1. **Grammatical differences**
+
+- **Class component**: Defined by the `class` keyword, you must inherit `React.Component` or `React.PureComponent`.
+
+- **Functional component**: Defined by `function` or arrow function, the function itself is a component.
+
+#### 2. **Status management**
+
+- **Class component**: Use `this.state` and `this.setState()` to manage the status of the component.
+
+- **Functional component**: Use `useState` Hook to manage the status.
+
+#### 3. **Life cycle method**
+
+- **Class component**: There are complete life cycle methods (such as `componentDidMount`, `componentDidUpdate`, `componentWillUnmount`, etc.).
+
+- **Functional components**: There is no built-in life cycle method, but life cycle behavior can be simulated through `useEffect` Hook.
+
+#### 4. **Performance optimization**
+
+- **Class components**: There are `shouldComponentUpdate` or `React.PureComponent` to avoid unnecessary updates.
+
+- **Functional components**: Use `React.memo` or `useMemo`, `useCallback` to optimize rendering.
+
+### Life cycle simulation in functional components
+
+In functional components, the commonly used life cycle methods are replaced by `useEffect`. We simulate the life cycle behavior in class components through different `useEffect` configurations.
+
+#### 1. **Simulate `componentDidMount` and `componentWillUnmount`**
+
+In functional components, `useEffect` is used to simulate `componentDidMount` and `componentWillUnmount`. Just put the side effect logic in `useEffect` and return a cleanup function to simulate the unloading process.
+
+```jsx
+
+Import React, { useState, useEffect } from 'react';
+
+Function Timer(){
+
+Const [seconds, setSeconds] = useState(0);
+
+// Equivalent to componentDidMount and componentWillUnmount
+
+UseEffect(() => {
+
+Const timerId = setInterval(() => {
+
+setSeconds(prev => prev + 1);
+
+}, 1000);
+
+// Cleanup function, equivalent to componentWillUnmount
+
+Return () => {
+
+clearInterval(timerId);
+
+};
+
+}, []); // Empty dependency array ensures that it only runs when components are mounted and unloaded
+
+Return <p>Timer: {seconds} seconds</p>;
+
+}
+
+```
+
+#### 2. **Simulate `componentDidUpdate`**
+
+If you want to perform side effects after the `props` or `state` change of the component, you can simulate `componentDidUpdate` through `useEffect`. You only need to pass the `props` or `state` that need to be monitored in the dependency array.
+
+```jsx
+
+Import React, { useState, useEffect } from 'react';
+
+Function SearchResults({ query }) {
+
+Const [results, setResults] = useState([]);
+
+// Equivalent to componentDidUpdate
+
+UseEffect(() => {
+
+// Simulate API requests
+
+fetchSearchResults(query)
+
+.then(data=>setResults(data))
+
+.Catch(error => console.error('Error fetching results:', error));
+
+}, [query]); // When the query changes, re-execute the side effects
+
+Return(
+
+<div>
+
+<h2>Search Results for: {query}</h2>
+
+<ul>
+
+{Results.map(result =>(
+
+<li key={result.id}>{result.name}</li>
+
+))}
+
+<<ul>
+
+<div>
+
+);
+
+}
+
+```
+
+In this example, `useEffect` will re-execute side effects when `query` is updated, similar to `componentDidUpdate` in class components.
+
+#### 3. **Simulate `getDerivedStateFromProps`**
+
+React does not provide hooks similar to `getDerivedStateFromProps` for functional components. But you can simulate it through `useEffect` and `useState`.
+
+```jsx
+
+Import React, { useState, useEffect } from 'react';
+
+Function MyComponent({name}){
+
+Const [displayName, setDisplayName] = useState(name);
+
+UseEffect(() => {
+
+setDisplayName(name); // Similar to getDerivedStateFromProps
+
+}, [name]); // The dependency is name, ensuring that the state is updated when the name changes.
+
+Return <p>{displayName}</p>;
+
+}
+
+```
+
+Here, `useEffect` monitors the change of `name`, and updates the `displayName` of the component when `name` changes.
+
+#### 4. **Simulate `shouldComponentUpdate`**
+
+Although `useEffect` does not directly simulate the function of `shouldComponentUpdate`, you can avoid unnecessary re-rendering through `React.memo`.
+
+```jsx
+
+Const ListItem = React.memo(({ item }) => {
+
+console.log('ListItem rendered');
+
+Return <li>{item.name}</li>;
+
+});
+
+Function ItemList({ items}){
+
+Return(
+
+<ul>
+
+{Items.map(item => (
+
+<ListItem key={item.id} item={item} />
+
+))}
+
+<<ul>
+
+);
+
+}
+
+```
+
+`React.memo` will optimize the performance of the `ListItem` component and will only be re-rendered when `item` changes.
+
+### Summary
+
+#### Life cycle method of class components:
+
+- Manage side effects, status updates, cleaning, etc. through `componentDidMount`, `componentWillUnmount`, `componentDidUpdate`, `getDerivedStateFromProps` and other methods.
+
+#### Life cycle management of function components:
+
+- Manage the state through `useState` and `useEffect` to simulate the life cycle method.
+
+- `useEffect` can simulate `componentDidMount`, `componentDidUpdate`, `componentWillUnmount`.
+
+- `React.memo` and other hooks (`useMemo`, `useCallback`) can be used to optimize performance.
+
+With the introduction of React Hooks, functional components have now become the mainstream way of React programming, and in most scenarios, they will be more concise and flexible than class components.
