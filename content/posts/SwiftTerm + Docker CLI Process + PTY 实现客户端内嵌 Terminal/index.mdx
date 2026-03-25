@@ -1,0 +1,636 @@
+# SwiftTerm + Docker CLI Process + PTY 实现客户端内嵌 Terminal
+
+## 1. 概述
+
+本文档详细记录了在 macOS SwiftUI 应用中集成容器终端（Container Terminal）功能的完整技术方案，包括方案选型依据、系统架构、核心实现细节，以及开发过程中遇到的关键问题与解决方案。
+
+---
+
+## 2. 方案选型
+
+### 2.1 最终方案：SwiftTerm + Docker CLI Process + PTY
+
+| 组件     | 选型                                 | 说明                        |
+| ------ | ---------------------------------- | ------------------------- |
+| 终端模拟器  | SwiftTerm（migueldeicaza/SwiftTerm） | 成熟的 VT100/Xterm 终端模拟器库    |
+| 容器连接   | `docker exec -it` via `Process`    | 通过系统进程调用 Docker CLI       |
+| I/O 通道 | PTY（Pseudo-Terminal）               | 用 `openpty()` 创建伪终端实现双向交互 |
+
+### 2.2 SwiftTerm 选型理由
+
+SwiftTerm 是由 Miguel de Icaza（Mono / Xamarin / .NET 创始人）维护的开源终端模拟器库，提供以下核心能力：
+
+- **完整的 ANSI/VT100/Xterm 转义序列支持**：包括 CSI（Control Sequence Introducer）、OSC（Operating System Command）、DCS（Device Control String）等标准序列的解析与渲染
+- **24-bit True Color**：支持 `\e[38;2;r;g;bm` 前景色和 `\e[48;2;r;g;bm` 背景色
+- **Cursor 管理**：光标移动、保存/恢复、可见性切换、形状变更
+- **Unicode 完整支持**：包括 Extended Grapheme Clusters（如 emoji 组合序列 👨‍👩‍👧‍👦）、CJK 宽字符、双向文本
+- **Scrollback Buffer**：可配置的历史回滚缓冲区
+- **Selection & Copy**：鼠标选择文本、复制粘贴
+- **AppKit / UIKit 双平台**：提供原生 `NSView` / `UIView` 子类
+
+该库已被多个商业产品采用，包括 Secure Shellfish、CodeEdit、La Terminal 等，经过了充分的生产验证。
+
+> **补充：什么是 VT100 终端模拟？**
+>
+> VT100 是 DEC（Digital Equipment Corporation）于 1978 年推出的视频终端，成为事实上的终端标准。现代终端模拟器需要解析数百种控制序列来实现：
+>
+> - 光标定位（如 `\e[10;20H` 移动到第 10 行第 20 列）
+> - 文本样式（粗体、斜体、下划线、闪烁、反显）
+> - 屏幕区域操作（滚动区域、擦除行/屏幕）
+> - 字符集切换（G0/G1/G2/G3）
+> - 鼠标事件报告
+> - 窗口标题设置
+>
+> 完整实现这些功能从零开发需要 6-12 个月，且很难做到与主流 shell 工具（vim、tmux、htop 等）的完美兼容。
+
+### 2.3 Docker exec + PTY 方案（vs Docker API）
+
+**方案对比：**
+
+| 维度 | Docker CLI + PTY | Docker Engine API |
+|------|-----------------|-------------------|
+| 连接方式 | `Process` 运行 `docker exec -it` | HTTP POST `/containers/{id}/exec` + WebSocket/HTTP hijack |
+| 实现复杂度 | 低：标准 POSIX PTY + Process | 高：需要处理 HTTP connection upgrade、流复用（stdin/stdout/stderr multiplexing） |
+| TTY 支持 | 原生：Docker CLI 自动处理 TTY 协商 | 需手动设置 `Tty: true`，并处理 raw stream |
+| 窗口大小调整 | `ioctl(TIOCSWINSZ)` 直接作用于 PTY | 需额外调用 `POST /exec/{id}/resize` API |
+| 依赖 | 需要主机安装 Docker CLI | 仅需访问 Docker socket (`/var/run/docker.sock`) |
+| 错误处理 | CLI 提供用户友好的错误信息 | 需自行解析 API 错误响应 |
+
+选择 Docker CLI + PTY 的核心原因是实现简单、行为与用户在原生 Terminal.app 中的体验一致，且 Docker CLI 的 TTY handling 已经非常成熟。
+
+> **补充：什么是 PTY（Pseudo-Terminal）？**
+>
+> PTY 是 Unix/POSIX 系统中的一种进程间通信机制，模拟了物理终端设备的行为。它由一对文件描述符组成：
+>
+> - **Master 端**（ptmx）：由终端模拟器持有，负责读取子进程输出并写入用户输入
+> - **Slave 端**（pts）：由子进程持有，子进程认为自己在与一个真实终端通信
+>
+> ```
+> ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+> │ SwiftTerm   │ ←→  │ PTY Master  │ ←→  │ PTY Slave   │ ←→ docker exec
+> │ (UI 渲染)    │     │ (fd: master)│     │ (fd: slave) │   (子进程)
+> └─────────────┘     └─────────────┘     └─────────────┘
+> ```
+>
+> 使用 PTY 而非普通 pipe 的关键区别：
+> - PTY 支持 `TIOCSWINSZ` ioctl 来通知子进程窗口大小变化
+> - PTY 提供行编辑（line discipline）功能
+> - PTY 使子进程的 `isatty()` 返回 `true`，从而启用交互式行为（如彩色输出、进度条）
+> - `docker exec` 的 `-it` 参数要求 stdin 是一个 TTY，否则会报错
+
+---
+
+## 3. 架构设计
+
+### 3.1 整体架构图
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    SwiftUI Layer                         │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │           ContainerTerminalTab                     │  │
+│  │  (Shell 选择器 / 连接断开 / 主题配色 / 状态视图)        │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+│                         │                                │
+│  ┌──────────────────────▼─────────────────────────────┐  │
+│  │           SwiftTermView (NSViewRepresentable)      │  │
+│  │  ┌──────────────────────────────────────────────┐  │  │
+│  │  │  Coordinator (holds strong ref to bridge)    │  │  │
+│  │  └──────────────────────────────────────────────┘  │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+└─────────────────────────┼────────────────────────────────┘
+                          │
+┌─────────────────────────▼────────────────────────────────┐
+│              TerminalView (AppKit NSView)                │
+│              SwiftTerm 提供的原生终端渲染视图                │
+│                         │                                │
+│              terminalDelegate (weak)                     │
+│                         ↓                                │
+│              TerminalBridge                              │
+│              (TerminalViewDelegate 实现)                  │
+└─────────────────────────┬────────────────────────────────┘
+                          │
+┌─────────────────────────▼────────────────────────────────┐
+│              DockerTerminalSession                       │
+│              (@MainActor, ObservableObject)              │
+│                                                          │
+│  ┌─────────────────┐  ┌──────────────┐  ┌────────────┐   │
+│  │ PTY master/slave│  │ Process      │  │ Read Task  │   │
+│  │ (openpty)       │  │ (docker exec)│  │ (async I/O)│   │
+│  └────────┬────────┘  └──────┬───────┘  └─────┬──────┘   │
+│           │                  │                │          │
+│           └──────────────────┼────────────────┘          │
+│                              ↓                           │
+│                   docker exec -it <id> /bin/sh           │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 3.2 核心文件职责
+
+| 文件 | 职责 | 关键类/结构 |
+|------|------|------------|
+| `SwiftTermView.swift` | NSViewRepresentable 桥接层，将 AppKit 的 TerminalView 嵌入 SwiftUI | `SwiftTermView`, `Coordinator` |
+| `DockerTerminalSession.swift` | 终端会话管理：PTY 创建、Process 生命周期、双向 I/O、resize 处理、Docker CLI 路径发现 | `DockerTerminalSession` |
+| `ContainerTerminalTab.swift` | UI 展示层：Shell 选择器、连接/断开按钮、浅色主题配色、容器停止状态提示 | `ContainerTerminalTab` |
+| `TerminalLine.swift` | 共享数据模型，同时供 `ImageTerminalTab` 使用 | `TerminalLine` |
+
+### 3.3 数据流
+
+```
+用户键盘输入
+    │
+    ▼
+TerminalView (捕获按键)
+    │
+    ▼ terminalDelegate.send(source:data:)
+TerminalBridge
+    │
+    ▼ session.write(data:)
+DockerTerminalSession
+    │
+    ▼ write(master, data, count)
+PTY Master FD ──→ PTY Slave FD ──→ docker exec 进程
+                                          │
+                                    (进程产生输出)
+                                          │
+PTY Master FD ←── PTY Slave FD ←──────────┘
+    │
+    ▼ read(master, &buffer, bufferSize)
+DockerTerminalSession (Read Task)
+    │
+    ▼ terminalView.feed(byteArray:)
+TerminalView (解析转义序列 → 渲染到屏幕)
+```
+
+---
+
+## 4. 核心实现细节
+
+### 4.1 PTY 创建与进程启动
+
+```swift
+// 创建 PTY 对
+var master: Int32 = 0
+var slave: Int32 = 0
+guard openpty(&master, &slave, nil, nil, nil) == 0 else {
+    throw TerminalError.ptyCreationFailed
+}
+
+// 设置初始窗口大小
+var winSize = winsize(
+    ws_row: UInt16(max(rows, 24)),
+    ws_col: UInt16(max(cols, 80)),
+    ws_xpixel: 0,
+    ws_ypixel: 0
+)
+ioctl(master, TIOCSWINSZ, &winSize)
+
+// 配置 Process
+let process = Process()
+process.executableURL = dockerCLIPath
+process.arguments = ["exec", "-it", containerID, shell]
+process.standardInput = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+process.standardOutput = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+process.standardError = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+try process.run()
+
+// slave 端已由子进程持有，父进程关闭自己的副本
+close(slave)
+```
+
+> **补充：`openpty()` 函数详解**
+>
+> ```c
+> int openpty(int *amaster, int *aslave, char *name,
+>             const struct termios *termp,
+>             const struct winsize *winp);
+> ```
+>
+> - `amaster`：输出参数，接收 master 端文件描述符
+> - `aslave`：输出参数，接收 slave 端文件描述符
+> - `name`：如果非 NULL，接收 slave 设备路径（如 `/dev/pts/3`）
+> - `termp`：初始终端属性（波特率、回显模式等），传 NULL 使用默认值
+> - `winp`：初始窗口大小，传 NULL 则之后通过 ioctl 设置
+>
+> 在父进程中关闭 slave fd 是标准做法——子进程通过继承已经持有了自己的 slave fd 副本，父进程只需要通过 master fd 进行读写。
+
+### 4.2 异步读取循环
+
+```swift
+readTask = Task.detached { [weak self] in
+    let fd = master
+    let bufferSize = 4096
+    var buffer = [UInt8](repeating: 0, count: bufferSize)
+
+    while !Task.isCancelled {
+        let bytesRead = read(fd, &buffer, bufferSize)
+        if bytesRead <= 0 { break }
+
+        let data = Array(buffer[0..<bytesRead])
+        await MainActor.run { [weak self] in
+            self?.terminalView?.feed(byteArray: data)
+        }
+    }
+
+    // 进程结束后的清理
+    await MainActor.run { [weak self] in
+        self?.disconnect()
+    }
+}
+```
+
+> **补充：为什么使用 `Task.detached` 而非普通 `Task`？**
+>
+> `read()` 是一个 **阻塞系统调用**——当 PTY master 端没有可读数据时，它会挂起当前线程直到数据到达。如果在 `@MainActor` 上下文中执行，会阻塞 UI 线程导致界面冻结。
+>
+> `Task.detached` 创建一个不继承当前 actor 上下文的非结构化任务，它会在 Swift Concurrency 的全局线程池中执行，避免阻塞主线程。读取到数据后，通过 `MainActor.run` 切回主线程更新 UI。
+
+### 4.3 窗口大小同步（Resize）
+
+```swift
+func resize(cols: Int, rows: Int) {
+    guard cols > 0, rows > 0 else { return }
+
+    var winSize = winsize(
+        ws_row: UInt16(rows),
+        ws_col: UInt16(cols),
+        ws_xpixel: 0,
+        ws_ypixel: 0
+    )
+    ioctl(masterFD, TIOCSWINSZ, &winSize)
+}
+```
+
+当 SwiftTerm 的 `TerminalView` 检测到视图大小变化时，会通过 delegate 回调通知新的行列数。`DockerTerminalSession` 将此信息通过 `ioctl(TIOCSWINSZ)` 传递给 PTY，PTY 内核驱动随后会向子进程发送 `SIGWINCH` 信号，通知其重新查询终端大小并刷新布局。
+
+> **补充：SIGWINCH 信号传递链路**
+>
+> ```
+> TerminalView 大小变化
+>     → delegate.sizeChanged(cols, rows)
+>         → ioctl(master, TIOCSWINSZ, &winSize)
+>             → 内核更新 PTY 的 winsize 结构
+>                 → 内核向 slave 端前台进程组发送 SIGWINCH
+>                     → docker exec 收到信号
+>                         → 容器内的 shell (如 bash) 调用 ioctl(TIOCGWINSZ) 获取新大小
+>                             → shell 通知 ncurses 应用（vim/htop 等）重绘
+> ```
+
+### 4.4 Docker CLI 路径发现
+
+Docker Desktop for macOS 安装 CLI 的路径不固定，需要按优先级搜索：
+
+```swift
+static func findDockerCLI() -> URL? {
+    let candidates = [
+        "/usr/local/bin/docker",
+        "/opt/homebrew/bin/docker",
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        // Rancher Desktop, Colima 等替代方案
+        "/usr/local/bin/nerdctl"
+    ]
+    return candidates
+        .map { URL(fileURLWithPath: $0) }
+        .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+}
+```
+
+---
+
+## 5. 问题与解决方案
+
+### 5.1 TerminalBridge 被 ARC 立即释放
+
+**问题描述：**
+
+SwiftTerm 的 `TerminalView.terminalDelegate` 属性声明为 `weak` 引用（这是 delegate 模式的标准做法，防止循环引用）。最初在 `makeNSView` 闭包中直接创建 bridge 对象：
+
+```swift
+// ❌ 错误写法
+func makeNSView(context: Context) -> TerminalView {
+    let tv = TerminalView()
+    tv.terminalDelegate = TerminalBridge(session: session) // 临时对象，立即被释放
+    return tv
+}
+```
+
+`TerminalBridge` 实例是一个临时局部变量，没有任何强引用持有它，方法返回后 ARC 立即回收。`terminalDelegate` 作为 weak 引用变为 `nil`，导致所有键盘输入都被丢弃。
+
+**尝试方案 1：`@State` 存储（失败）**
+
+```swift
+// ❌ 不可靠
+@State private var terminalBridge: TerminalBridge?
+
+func makeNSView(context: Context) -> TerminalView {
+    let bridge = TerminalBridge(session: session)
+    terminalBridge = bridge  // 在渲染期间修改 @State，可能被 SwiftUI 丢弃
+    // ...
+}
+```
+
+在 `makeNSView` 执行期间（即 view rendering phase）修改 `@State` 属于未定义行为。SwiftUI 的渲染流水线可能会丢弃此次 state 变更，导致 bridge 仍然没有被持有。
+
+> **补充：SwiftUI 渲染阶段的 State 变更问题**
+>
+> SwiftUI 的视图更新遵循严格的生命周期：
+> 1. **Evaluation Phase**：计算 body 属性、调用 `makeNSView` / `updateNSView`
+> 2. **Commit Phase**：将变更提交到渲染树
+> 3. **Layout Phase**：计算布局
+> 4. **Render Phase**：绘制到屏幕
+>
+> 在 Evaluation Phase 中修改 `@State` 会触发新的渲染周期，但 SwiftUI 可能会合并或丢弃这次变更以避免无限循环。Apple 的官方文档明确指出："Don't modify state during view rendering."
+
+**最终方案：Coordinator 模式**
+
+```swift
+class Coordinator: NSObject {
+    var bridge: TerminalBridge?  // 强引用，生命周期与 NSViewRepresentable 一致
+
+    func setupBridge(session: DockerTerminalSession, terminalView: TerminalView) {
+        let bridge = TerminalBridge(session: session)
+        self.bridge = bridge
+        terminalView.terminalDelegate = bridge
+    }
+}
+
+func makeCoordinator() -> Coordinator {
+    Coordinator()
+}
+
+func makeNSView(context: Context) -> TerminalView {
+    let tv = TerminalView()
+    context.coordinator.setupBridge(session: session, terminalView: tv)
+    return tv
+}
+```
+
+`Coordinator` 是 `NSViewRepresentable` 提供的标准机制，其生命周期由 SwiftUI 管理，与对应的 NSView 保持一致。在 Coordinator 中持有 bridge 的强引用，确保 delegate 在整个视图生命周期内有效。
+
+---
+
+### 5.2 TerminalView 不接收键盘输入
+
+**问题描述：**
+
+AppKit 的键盘事件分发基于 **First Responder 链**。只有成为 first responder 的 NSView 才能接收 `keyDown(_:)` 事件。SwiftTerm 的 `TerminalView` 嵌入 SwiftUI 后，不会自动成为 first responder。
+
+```swift
+// ❌ 时机不对
+func makeNSView(context: Context) -> TerminalView {
+    let tv = TerminalView()
+    tv.window?.makeFirstResponder(tv)  // 此时 tv.window 为 nil！
+    return tv
+}
+```
+
+在 `makeNSView` 返回时，NSView 尚未被添加到 window 的视图层级中，`tv.window` 为 `nil`。
+
+**解决方案：延迟到下一个 RunLoop 周期**
+
+```swift
+func makeNSView(context: Context) -> TerminalView {
+    let tv = TerminalView()
+    // ...setup...
+
+    DispatchQueue.main.async {
+        tv.window?.makeFirstResponder(tv)
+    }
+    return tv
+}
+```
+
+`DispatchQueue.main.async` 将闭包排入主线程 RunLoop 的下一个周期执行。此时 SwiftUI 已经完成了视图层级的组装，`tv.window` 不再为 `nil`。
+
+> **补充：AppKit First Responder 机制**
+>
+> AppKit 使用 **Responder Chain** 模式处理事件：
+>
+> ```
+> NSEvent (keyDown)
+>     → NSWindow.firstResponder
+>         → 如果处理了，停止传播
+>         → 否则沿 responder chain 向上传递
+>             → NSView.nextResponder (通常是 superview)
+>                 → ... → NSWindow → NSApplication
+> ```
+>
+> 一个 NSView 必须：
+> 1. 覆写 `acceptsFirstResponder` 返回 `true`（SwiftTerm 已实现）
+> 2. 被 `window.makeFirstResponder(_:)` 显式激活
+>
+> 在 SwiftUI 宿主环境中，由于视图创建和 window 挂载是异步的，必须延迟 first responder 的设置。
+
+---
+
+### 5.3 UInt16 负值崩溃
+
+**问题描述：**
+
+SwiftTerm 的 `TerminalView` 以 `frame: .zero` 创建时，内部 terminal 模型的 `cols` 和 `rows` 可能返回 0 或负值（在布局完成前）。Swift 的 `UInt16` 初始化器在接收负数时会触发运行时 fatal error：
+
+```
+Fatal error: Negative value is not representable
+```
+
+这与 C 语言中整数类型的隐式截断行为不同——Swift 在 debug 和 release 模式下都会对整数溢出进行检查。
+
+**解决方案：防御性边界检查**
+
+```swift
+// 连接时提供合理默认值
+func connect() {
+    let cols = max(terminal.cols, 80)
+    let rows = max(terminal.rows, 24)
+    // ...
+}
+
+// resize 回调中过滤无效值
+func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+    guard newCols > 0, newRows > 0 else { return }
+    session.resize(cols: newCols, rows: newRows)
+}
+```
+
+使用 `max()` 确保最小值为标准终端尺寸（80×24），并在 resize 回调中添加 guard 过滤零值和负值。
+
+---
+
+### 5.4 deinit 无法访问 MainActor 隔离属性
+
+**问题描述：**
+
+`DockerTerminalSession` 标记为 `@MainActor`，意味着其所有存储属性都被隔离到主线程。然而 Swift 的 `deinit` 是 `nonisolated` 的——它可能在任何线程上执行（由 ARC 的最后一个引用释放时机决定）。
+
+```swift
+@MainActor
+class DockerTerminalSession: ObservableObject {
+    var masterFD: Int32 = -1
+    var process: Process?
+    var readTask: Task<Void, Never>?
+
+    // ❌ 编译错误：Cannot access MainActor-isolated properties from nonisolated context
+    deinit {
+        readTask?.cancel()
+        if masterFD >= 0 { close(masterFD) }
+        process?.terminate()
+    }
+}
+```
+
+> **补充：Swift Concurrency 的 Actor 隔离与 deinit**
+>
+> Swift 5.5+ 的 actor 隔离模型确保同一 actor 的属性不会被并发访问。`deinit` 被设计为 `nonisolated` 是因为对象销毁的时机由 ARC 决定，可能发生在任意线程。如果 `deinit` 是 isolated 的，它需要异步调度到对应 actor 上执行，但这意味着对象在 `deinit` 被调度后、实际执行前的时间窗口内处于"半死亡"状态，会引入新的内存安全问题。
+>
+> Swift Evolution 提案 SE-0371 讨论了这个问题，目前的共识是 `deinit` 保持 `nonisolated`，开发者需要自行管理清理逻辑。
+
+**解决方案：移除 deinit，使用显式 disconnect()**
+
+```swift
+@MainActor
+class DockerTerminalSession: ObservableObject {
+    func disconnect() {
+        readTask?.cancel()
+        readTask = nil
+
+        process?.terminate()
+        process = nil
+
+        if masterFD >= 0 {
+            close(masterFD)
+            masterFD = -1
+        }
+    }
+}
+```
+
+在 SwiftUI 侧通过 `.onDisappear` 和状态变更触发 `disconnect()`：
+
+```swift
+.onDisappear {
+    session.disconnect()
+}
+.onChange(of: containerState) { newState in
+    if newState == .stopped {
+        session.disconnect()
+    }
+}
+```
+
+这种模式将资源清理的时机从"不可控的 ARC 回收"转为"可控的业务逻辑触发"，同时避免了 actor 隔离冲突。
+
+---
+
+### 5.5 Task.detached 中的并发捕获问题
+
+**问题描述：**
+
+```swift
+// ❌ 编译警告/错误
+func startReading() {
+    readTask = Task.detached { [weak self] in
+        let fd = self?.masterFD  // ⚠️ 需要在 MainActor 上访问
+        // ...
+    }
+}
+```
+
+在 `Task.detached` 的闭包中通过 `self` 访问 `@MainActor` 隔离的属性，违反了 Swift Concurrency 的并发安全规则。
+
+**解决方案：闭包外预捕获值类型**
+
+```swift
+func startReading() {
+    let masterForRead = self.masterFD  // ✅ 在 MainActor 上下文中捕获值
+
+    readTask = Task.detached {
+        let bufferSize = 4096
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+
+        while !Task.isCancelled {
+            let bytesRead = read(masterForRead, &buffer, bufferSize)
+            if bytesRead <= 0 { break }
+
+            let data = Array(buffer[0..<bytesRead])
+            await MainActor.run { [weak self] in
+                self?.terminalView?.feed(byteArray: data)
+            }
+        }
+    }
+}
+```
+
+`masterForRead` 是 `Int32` 值类型，在 `@MainActor` 上下文中捕获后，可以安全地在 detached task 中使用。文件描述符本身是线程安全的（`read` / `write` 系统调用是线程安全的），因此这种做法既符合 Swift Concurrency 规则，也是 POSIX 语义安全的。
+
+---
+
+### 5.6 ImageTerminalTab 编译失败
+
+**问题描述：**
+
+在重构 `ContainerTerminalTab` 的过程中，原来内联定义在该文件中的 `TerminalLine` struct 被移除。而 `ImageTerminalTab`（用于 Docker Images 的模拟终端视图）仍在引用 `TerminalLine`，导致编译错误：
+
+```
+Cannot find type 'TerminalLine' in scope
+```
+
+**解决方案：提取共享模型**
+
+将 `TerminalLine` 提取到独立的 `TerminalLine.swift` 文件中：
+
+```swift
+// TerminalLine.swift
+import Foundation
+
+struct TerminalLine: Identifiable, Equatable {
+    let id: UUID
+    let text: String
+    let timestamp: Date
+    let isError: Bool
+
+    init(text: String, isError: Bool = false) {
+        self.id = UUID()
+        self.text = text
+        self.timestamp = Date()
+        self.isError = isError
+    }
+}
+```
+
+`ContainerTerminalTab` 和 `ImageTerminalTab` 均引用此共享文件，遵循了 **Single Source of Truth** 原则。
+
+---
+
+## 6. 主题与配色方案
+
+ContainerTerminalTab 实现了浅色主题适配：
+
+```swift
+func applyLightTheme(to terminalView: TerminalView) {
+    terminalView.nativeBackgroundColor = NSColor.white
+    terminalView.nativeForegroundColor = NSColor.black
+    terminalView.selectedTextBackgroundColor = NSColor.selectedTextBackgroundColor
+    terminalView.cursorColor = NSColor.black
+}
+```
+
+SwiftTerm 支持通过编程方式设置 ANSI 16 色、256 色调色板以及默认前景/背景色，可以实现与应用整体 UI 风格一致的终端外观。
+
+---
+
+## 7. 总结
+
+| 维度 | 实际表现 |
+|------|---------|
+| 开发周期 | 约 3-5 天（对比自研终端模拟器的 6-12 个月） |
+| 兼容性 | 完整支持 vim、nano、htop、tmux 等交互式工具 |
+| 性能 | SwiftTerm 原生 AppKit 渲染，高吞吐量输出无卡顿 |
+| 维护成本 | 核心逻辑约 400 行代码，易于理解和维护 |
+
+关键设计决策回顾：
+
+1. **选择 SwiftTerm** 而非自研——避免了终端模拟器这个"冰山式"复杂度的陷阱
+2. **选择 Docker CLI + PTY** 而非 Docker API——大幅降低实现复杂度，行为与原生终端一致
+3. **使用 Coordinator 模式** 管理 delegate 生命周期——符合 SwiftUI 最佳实践
+4. **显式 disconnect() 替代 deinit** ——规避 Swift Concurrency 的 actor 隔离限制
+5. **值类型预捕获** 解决并发闭包的隔离问题——简洁且 POSIX 安全
