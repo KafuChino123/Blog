@@ -1,0 +1,439 @@
+Reference materials:
+
+Https://www.cs.cornell.edu/~asampson/blog/llvm.html
+
+Https://zhuanlan.zhihu.com/p/472813616
+
+Https://www.cnblogs.com/luoganttcc/p/16603993.html
+
+Https://blog.csdn.net/Airths/article/details/122172096
+
+Https://juejin.cn/post/6984084367874195463
+
+Https://juejin.cn/post/6844903506164498440
+
+Https://lionjohn.gitbooks.io/ioscookbook/content/CHAPTER3/lldb.html
+
+Https://link.juejin.cn/? target=http%3A%2F%2Flldb.llvm.org%2Ftutorial.html
+
+[Dance with the debugger - LLDB's Waltz] (https://objccn.io/issue-19-2/)
+
+[LLDB Quick Start Guide - Apple Developer] (https://developer.apple.com/library/archive/documentation/IDEs/Conceptual/gdb_to_lldb_transition_guide/document/Introduction.html)
+
+### 1. LLVM
+
+#### 1.1 What is LLVM?
+
+==**The LLVM project is a collection of modular, reusable compilers and tool chain technologies. **==
+
+It is a compiler, to be precise, == a set of frameworks + some framework-based compiler implementations (such as Clang) ==, which is a very advanced compilation system at present. This is especially true for languages such as C/C++/Objective-C.
+
+Of course, not only that, it also supports [[#1. Extra.1 Instant compilation JIT|JIT]], and many non-C family languages.
+
+The reason why LLVM is excellent lies in the following points:
+
+- 1. LLVM's [[#1. Extra.2 Intermediate expression IR|Intermediate expression]] (IR) can be dumped into a readable text form (the syntax is a bit like an assembly), which looks insignificant, but many other compilers only have data structures in memory, which greatly increases the difficulty of learning debugging.
+
+- 2. == Modular design == is relatively good. On this aspect, it is a backward advantage, which absorbs a lot of experience from predecessors, and is also closely related to the architect's architectural skills.
+
+- 3. Although it started from an academic project, LLVM has always been supported by the industry ( Apple), so it is not only easy to use, but also open source and can be customized. Avoid the dilemma of choosing HotSpot and Jikes in Java.
+
+*Note*:
+
+- The American Computer Association (ACM) awarded its 2012 Software System Award to LLVM. The software and technologies that have previously won this award include: Java, Apache, Mosaic, the World Wide Web, Smalltalk, UNIX, Eclipse, etc.;
+
+- Founder: ==Chris Lattner, also the father of Swift; ==
+
+- Fun news: Chris Latter originally just wanted to write a low-level virtual machine, which is also the origin of the name LLVM, ==low level virtual machine==, the same as Java's JVM virtual machine, but later, LLVM has never been used as a virtual machine, even if the fame of LLVM has spread. Therefore, people decided to still call him LLVM. More often than not, it is just used as a "trademark". In fact, it has nothing to do with the virtual machine. The official description is as follows:
+
+**The name "LLVM" itself is not an acronym; it is the full name of the project.
+
+The name "LLVM" itself is not an acronym; it is the full name of the project. **
+
+#### 1.2 Why pay attention to LLVM
+
+LLVM is very good, but if you don't do compiler research, what's the use of understanding it?
+
+Understanding the compiler can help us analyze the behavior of the program and optimize the translation of the program according to the system. For example, in the data processing framework, when using high-order APIs or even SQL-written programs, how to improve their operating efficiency with compiled ideas, etc. If it is possible to engage in the following work in the future, knowing LLVM in advance will be very helpful for subsequent learning:
+
+- [Simulator] (https://link.zhihu.com/? target=http%3A//research.cs.wisc.edu/vertical/papers/2014/wddd-sim-harmful.pdf)
+
+- Dynamic binary detection tool similar to Pin
+
+- Source code-level conversion (from simple things `sed` to more complete tools involving AST parsing and serialization)
+
+- Crack the kernel to intercept system calls
+
+- Anything similar to management procedures
+
+Sometimes a job does not look like a complete compilation behavior, but as long as it involves the conversion of source code to source code, understanding LLVM is usually helpful.
+
+The following are some examples of research projects that use LLVM to complete not all compilation operations:
+
+- [UIUC's Virtual Ghost] (https://link.zhihu.com/? target=http%3A//sva.cs.illinois.edu/pubs/VirtualGhost-ASPLOS-2014.pdf) shows how you use the compiler channel to protect the process from the damaged operating system kernel.
+
+- [CoreDet of UW](https://link.zhihu.com/? target=http%3A//homes.cs.washington.edu/~djg/papers/asplos10-coredet.pdf) Make multi-threaded programs certain.
+
+- In approximate computing work, use LLVM pass to inject errors into the program to simulate error-prone hardware.
+
+Emphasize again: LLVM is not only used to implement new compilers and compilation optimization!
+
+#### 1.3 Basic architecture
+
+##### 1.3.1 Traditional compiler architecture
+
+![]( Traditional compiler architecture.png)
+
+- Frontend: front-end, carry out **lexical analysis, syntax analysis, semantic analysis and generation of intermediate code** and other work;
+
+- Optimizer: Optimizer, responsible for **intermediate code optimization**;
+
+- Backend: back-end, **generate machine code**.
+
+##### 1.3.2 LLVM Compiler Architecture
+
+![]( LLVM architecture.jpg)
+
+For the structure of LLVM:
+
+- Different front-end and back-end use == unified intermediate code LLVM Intermediate Representation (LLVM IR)==;
+
+- If you need to support a new programming language, you only need to implement a new front-end;
+
+- If you need to support a new hardware device or architecture, you only need to implement a new back-end;
+
+- The optimization stage is a **general stage**, which is aimed at a unified LLVM IR. Whether it supports a new programming language or - supports a new hardware device, ** does not need to modify the optimization stage**;
+
+- In contrast, the front-end and back-end of GCC are not too separated, and the front-end and back-end are coupled together. Therefore, it becomes particularly difficult for GCC to support a new language or a new target platform;
+
+- **LLVM is now used as a general infrastructure to implement various static and runtime compilation languages** (GCC family, Java,. NET, Python, Ruby, Scheme, Haskell, D, etc.).
+
+![]( LLVM overall architecture.jpg)
+
+##### 1.3.3 About Clang
+
+Clang is a sub-project of the **LLVM project, the front-end of the C/C++/Objective-C compiler based on the LLVM architecture**.
+
+Compared with GCC, Clang has the following advantages:
+
+- **Compilation speed**: On some platforms, the compilation speed of Clang is significantly faster than that of GCC (the compilation speed of OC in Debug mode is 3 times faster than that of GGC);
+
+- **Small memory occupied**: The memory occupied by AST generated by Clang is about one-fifth of that of GCC;
+
+- **Modular design**: Clang adopts library-based modular design, which is easy to reuse for IDE integration and other purposes;
+
+- **Strong readability of diagnostic information**: During the compilation process, Clang creates and retains a large number of detailed metadata, which is conducive to debugging and error reporting;
+
+- The design is clear and simple, **easy to understand**, easy to expand and enhance.
+
+#### 1. Extra.1 Instant compilation JIT
+
+Https://zhida.zhihu.com/search/3660499413131997058
+
+JIT refers to ==Just-In-Time Compilation==, which is a technology that ==dynamically compiles source code or bytecode into machine code== during program operation.
+
+Specifically, the JIT compiler will analyze the code when it is executed and compile the selected code fragments into optimized machine code, so that these compiled codes can be directly executed in subsequent execution, so as to improve the execution efficiency of the program.
+
+The advantages of JIT include:
+
+- It can be optimized according to the specific situation at runtime (such as hardware characteristics, input data, etc.) to generate more efficient machine code;
+
+- Support dynamic linking and runtime adjustment, so that the program can better adapt to different operating environments;
+
+- Runtime data can be used during the compilation process for more accurate optimization.
+
+However, JIT also has some disadvantages:
+
+- Because the compilation process takes place at runtime, it will lead to a certain startup delay and runtime performance overhead;
+
+- It is not suitable for frequent startup and deactivation scenarios, because it needs to be recompiled every time it is started;
+
+- For code that is not often executed, it may not be optimized, thus affecting the overall performance.
+
+In the context of LLVM, supporting JIT means that LLVM can dynamically compile code from C/C++/Objective-C and other languages into machine code suitable for the current operating environment, thus improving the execution efficiency of these languages. In addition, the intermediate expression (IR) of LLVM can be dumped into text form, which helps developers understand and debug the code.
+
+#### 1. Extra.2 Intermediate expression IR
+
+Https://zhida.zhihu.com/search/3660499421050843162
+
+Intermediate Representation (IR, Intermediate Representation) is a language-independent abstract representation in which the source code is converted into == during the compilation process, which is used for further optimization and generation of target code.
+
+In LLVM, intermediate expression (IR) specifically refers to ** a text form that can be read and written **. Its syntax is similar to assembly language, which makes it easy to understand and debug, and can also be used as a common goal for many high-level languages, **to facilitate the conversion and optimization between different languages**. By using intermediate expressions, LLVM can achieve an efficient compilation process and support the compilation needs of multiple languages. In addition, the modular design of ==intermediate expression also makes LLVM have good scalability and flexibility==.
+
+### two LLDB
+
+#### 2.1 What is LLDB?
+
+==LLDB (Low Level Debugger) is a new generation of high-performance debugger, which is a collection of a set of reusable components ==. Most of these components are existing libraries in LLVM projects, such as: Clang expression parser, LLVM disassembler, etc.
+
+LLDB is the default debugger in Xcode on macOS. **The console at the bottom of the Xcode main window is the area where developers interact with LLDB**. LLDB allows developers to pause the process at a specific moment when the program is running, view the value of variables, execute custom instructions, control the execution process of the code, and so on.
+
+#### 2.2 The essence of LLDB
+
+As mentioned above, LLDB has been built into Xcode. It is actually stored in Xcode as a **shared library**
+
+`/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework` directory.
+
+That is to say, the shared library `LLDB.framework` provides a low-level debugging environment for Xcode, and the LLDB command line tool will link to this shared library and use the API in this shared library.
+
+The API of LLDB is open to the public as an interface for C++ in the shared library. In addition, LLDB also discloses the entire API through Python script binding, which allows these APIs to be used in the LLDB embedded script interpreter and in any standard Python file imported into the lldb.py module. The shared LLDB API not only allows LLDB to be used for debugging, but also allows LLDB to be used for symbolization, disassembly, object and symbolic file self-reflection, etc.
+
+#### 2.3 iOS LLDB debugging
+
+Https://link.juejin.cn/? target=http%3A%2F%2Flldb.llvm.org%2Ftutorial.html
+
+LLDB debugger replaced GDB early and became the default debugger in Xcode engineering.
+
+- **Command execution method**: You must hit the breakpoint -> before you can enter the debugging statement in the console. Or click pause after running;
+
+- **Command Complete**: Complete will pop up automatically when the third character is typed, or pop up manually through the Esc key.
+
+About the `~/.lldbinit` file: LLDB will read the ` ~/.lldbinit` file at startup. This file stores the script `/alias` executed when LLDB starts, etc.
+
+##### 2.3.1 Debugging command
+
+$0 $1, etc. indicates the debugging record of the current operation, which can be used directly. ( Anything beginning with a dollar sign exists in the namespace of LLDB)
+
+The LLDB command will make ** prefix matching ** - such as the `print` command, you can also use `prin`, `pri`, or `p`. But you can't use `pr`, because LLDB can't eliminate the ambiguity with `process`. ( Many commands are acred or aliases)
+
+**Help** View command help (all commands are displayed when parameters are not passed, and you can check the use of Moi parameters specifically):
+
+```
+
+Help po
+
+Help break command add specifically to check the help of add parameters
+
+```
+
+**P** (print) function is to output the information of the native type (boolean, integer, float, etc):
+
+```
+
+P (int)[[[self view] subviews] count]
+
+P/x 16 print/<fmt> format means that variables or values are output in hexadecimal.
+
+P/t 16 binary output (t means two)
+
+P/c 16 Print string
+
+X/4c $str x is named to view memory. Check 4 bytes here
+
+```
+
+**Po** (print object) function is to output the information of objects in objective-c. (Alias for e -o -):
+
+```
+
+Po [self view] Output the current view information
+
+Po [[[UIApplication sharedApplication] keyWindow] recursiveDescription] Print the current view hierarchy
+
+```
+
+**Call** Like po or p, it is also a call. Use it when you don't need to display the output:
+
+```
+
+Call [self.view setBackgroundColor:[UIColor redColor]]
+
+```
+
+**Expr** (full name expression, also abbred as e) Modify variable values, pointers, etc. at runtime:
+
+```
+
+E NSString *$str = @"blog.xigulu.com" // Define a variable str
+
+E @import UIKit
+
+E cellItem.layer.borderWidth = 1
+
+E (void)[CATransaction flush] // Refresh the interface (call when refreshing the interface, because the program has been paused)
+
+```
+
+```
+
+E id $view = (id) 0x7fbd71432590
+
+E (void) [$view setBackgroundColor:[UIColor redColor]] // Change the background color of view
+
+E (void) [CATransaction flush]
+
+```
+
+```
+
+E id $nvc = [[[UIApplication sharedApplication] keyWindow] rootViewController] // Get the root NavigationController
+
+E id $vc = [UIViewController new] // Generate a vc
+
+E (void)[[$vc view] setBackgroundColor:[UIColor yellowColor]]
+
+E (void)[$vc setTitle:@"Yay!"]
+
+E (void)[$nvc pushViewContoller:$vc animated:YES] // push
+
+Caflush // e (void)[CATransaction flush] // Display
+
+```
+
+**Bt** (full name thread backtrace) prints the call stack, and add all to print all thread stacks. This command can be used when the program is wrong.
+
+You can put the breakpoint at the beginning of the function, then use the `thread return` command to rewrite the behavior of the function, and then continue:
+
+```
+
+Thread backtrace all // View all thread call stacks
+
+Thread list // List all threads
+
+Thread return <exp> // It can be used to control the program flow and forge the return value
+
+```
+
+**Frame variable** Get all variable values:
+
+```
+
+Frame v self->testVar // You can also get a single variable value
+
+Frame info // The current number of lines and source code files, and some other information
+
+```
+
+**Image** can be used for addressing, and there are multiple combination commands. It is often used to find the code position corresponding to the stack address, and it is used to check errors (can locate the number of lines of error code):
+
+```
+
+Image lookup --address 0x00000000010004af8 // The last is the stack address
+
+```
+
+**Breakpoint** (or abbrified as b) set a breakpoint. ( Can be added during operation):
+
+```
+
+Breakpoint set -f XXX.m -l 28 // Set the breakpoint on line 28
+
+B ViewController.swift:28 // Set the breakpoint on line 28 (xxx.m is the same)
+
+B 28 // The function is the same as above
+
+// Directly specify the function (symbol breakpoint: in Xcode GUI, as long as the method is executed, the breakpoint will be triggered, which is only for this class)
+
+B myfunc
+
+B-[NSArray objectAtIndex:]
+
+Breakpoint list // List all breakpoints. Abbreefied br li
+
+Br dis 1 // Disable a breakpoint
+
+Breakpoint delete 3 // Delete breakpoint No. 3
+
+```
+
+**Breaking point debugging command**: `c` is process continue, `n` is step over the next step, `s` is step in, `thread step-out` is step out. ( N, s is more commonly used)
+
+```
+
+N // Next step
+
+S // Enter
+
+```
+
+**Watchpoint**: listen to the changes of an instance. ( Equival to debugging variable window in Xcode -> right-click a variable -> Watch x)
+
+**Note**: Watchpoint is sub-type, including read, write or read_write type. Only the write type can be added by right-clicking on Xcode.
+
+```
+
+Watchpoint set self->testVar // Set watchpoint for the variable address
+
+Watchpoint set v -w read_write _mybtn // Set the read_write type monitoring for the _mybtn variable
+
+Watchpoint set expression 0x00007fb27b4969e0 // Set a watchpoint for the memory address, which can be obtained from the `p` command mentioned above
+
+Watchpoint command add -o 'frame info' 1 // Add the subcommand `frame info` to watchpoint No. 1
+
+Watchpoint list // List all watchpoints
+
+Watchpoint delete // Delete all watchpoints
+
+```
+
+**Define alias**: We can freely create a collection of aliases for LLDB commands. LLDB will read the `~/.lldbinit` file at startup, which stores the alias created by the command alias command:
+
+```
+
+Command alias mycommand image lookup --address %1 // Define mycommand alias
+
+```
+
+The above can be simplified to `mycommand 0x000000100004af8` for call:
+
+```
+
+Breakpoint set --file foo.c --line 12
+
+Command alias bfl breakpoint set -f %1 -l %2 // Use alias
+
+Bfl foo.c 12 // Simplified call method
+
+Command unalias bfl // Cancel alias
+
+```
+
+**Declare variables in lldb**: the same as the variables in PHP
+
+```
+
+E int $a = 2 // Ordinary type
+
+P$a*19
+
+E NSArray *$array = @[ @"Saturday", @"Sunday", @"Monday" ] // Object Type
+
+P [$array count]
+
+```
+
+##### 2.3.2 Debug the program in the terminal
+
+Https://casatwy.com/shi-yong-lldbdiao-shi-cheng-xu.html
+
+Http://www.cocoachina.com/ios/20150126/11021.html
+
+Generally, it is debugged in Xcode, or it can also be debugged in the command line. The steps are as follows:
+
+**One. ** Load the program for debugging
+
+**Two. ** Bind a running program to LLDB
+
+**Three. ** Set breakpoints and observation points
+
+**Four. ** Execution of control procedures
+
+**Five. ** Navigate in the debugging program
+
+**Six. ** Variables to check the status and value
+
+**S7. ** Execute the alternative code
+
+```
+
+// Start debugging. (Or directly `lldb` to enter the REPL interactive interface)
+
+$ lldb /Users/xuneng/Desktop/MacApp/MacDown.app
+
+// Set the breakpoint.... (Only the app program is not easy to set up)
+
+$ run // Start the program
+
+$ q // Exit lldb
+
+```
