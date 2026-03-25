@@ -1,0 +1,267 @@
+# LazyVStack vs VStack: In-depth comparison and cache mechanism analysis
+
+> After the container is stopped, the UI status is not refreshed. After layer-by-layer troubleshooting, the view cache reuse mechanism of LazyVStack is located.
+
+---
+
+## I. List of core differences
+
+| Features | VStack | LazyVStack |
+
+|-------|--------|------------|
+
+| View creation timing | **One-time**Create all sub-views | **Create on demand** and value only when entering the visible area |
+
+| Memory occupancy | All sub-views reside in memory | Only views near the area can be viewed in memory |
+
+| View cache/reuse | No cache, state change will be re-valued | Cache according to `Identifiable.id`, old views may be reused |
+
+| View destruction | Uniform destruction when the parent view is destroyed | After rolling out of the visible area, ** may ** be recycled |
+
+| Applicable scale | Small list (< 100 items) | Large list (hundreds ~ tens of thousands) |
+
+| Scrolling performance | Slow initialization when the list is extremely long | Always smooth, loading on demand |
+
+---
+
+## II. Performance optimization mechanism of LazyVStack
+
+### 2.1 Deferred Evaluation
+
+````swift
+
+LazyVStack{
+
+ForEach(items) { item in
+
+RowView(item: item) // It will only be valued when scrolling nearby
+
+}
+
+}
+
+```
+
+LazyVStack does not call `body` for all subviews at the layout stage, but maintains an "index range that needs to be rendered" and only performs view construction for elements within that range. This is the fundamental reason why it maintains smooth processing of big data sets.
+
+### 2.2 View cache based on Identifiable.id
+
+This is the most critical and most likely mechanism for LazyVStack to trigger bugs:
+
+1. **First appearance**: The element enters the visible area → Create a view according to `Identifiable.id` → Cache
+
+2. **Reappears**: The element with the same `id` enters the visible area → **reuse the cache view** instead of revaluating
+
+3. **Update judgment**: Decide whether you need to re-render the cached view through `Equatable` comparison
+
+### 2.3 Update the judgment process
+
+```
+
+Elements appear in the visual area.
+
+│
+
+▼
+
+Does the cache view of this id exist?
+
+├─ No → Create a new view and add it to the cache
+
+└─ Yes → Equalable Comparison (old == new)
+
+├─ true → Skip rendering and reuse directly
+
+└─ false → Revalue body
+
+```
+
+---
+
+## III. Typical problems caused by the cache mechanism
+
+### 3.1 Problem Scenario: Moving Elements Across ForEach
+
+````swift
+
+LazyVStack{
+
+// Section 1: Running
+
+ForEach(runningContainers) { container in
+
+ContainerRow(container: container)
+
+}
+
+// Section 2: Stopped
+
+ForEach(stoppedContainers) { container in
+
+ContainerRow(container: container)
+
+}
+
+}
+
+```
+
+When a container moves from `runningContainers` to `stoppedContainers`:
+
+1. The `id` disappears from the first ForEach
+
+2. The same `id` appears in the second ForEach
+
+3. LazyVStack found that **the id has a cached view** → direct reuse
+
+4. If Equatable's judgment is insufficient → **The UI of the old state is displayed as it is**
+
+**External performance**: The data layer has been updated correctly, but the UI still shows the loading animation. Switch Tab and return to normal after cutting back (because the entire view tree was destroyed and rebuilt, and the cache was emptied).
+
+### 3.2 Why doesn't VStack have this problem?
+
+VStack has no cache mechanism. Every time the state change triggers revaluation, all subviews will re-execute `body`, and there is no possibility of "reusing old views".
+
+---
+
+## IV. Defense strategy
+
+### Strategy 1: Ensure that Equalable covers all UI-related statuses
+
+````swift
+
+Struct ContainerViewModel: Identifiable, Equatable {
+
+Let id: String
+
+Var state: ContainerState
+
+Var isTransitioning: Bool
+
+// ✅ Compare all the fields that affect the UI
+
+Static func == (lhs: Self, rhs: Self) -> Bool {
+
+Lhs.id == rhs.id &&
+
+Lhs.state == rhs.state &&
+
+lhs.isTransitioning == rhs.isTransitioning
+
+}
+
+}
+
+```
+
+> **Common traps**: `==` only compares `id`, causing SwiftUI to think that the element has not changed and skips re-rendering.
+
+### Strategy 2: Gather all UI states into the model
+
+````swift
+
+// ❌ External parameter passing - ForEach does not perceive changes
+
+Container Row(
+
+Container: container,
+
+isTransitioning: viewModel.transitioningIDs.contains(container.id)
+
+)
+
+// ✅ State embedded in the model - ForEach perceives changes through Equalable
+
+ContainerRow(container: container) // isTransitioning is already an attribute of container
+
+```
+
+The updated judgment of ForEach is based on the Equatable** of the **element itself, and the parameter changes passed from the outside are not within its detection range.
+
+### Strategy 3: Use VStack directly for small lists
+
+````swift
+
+// The number of containers is usually < 100, and VStack is fully competent.
+
+VStack {
+
+ForEach(runningContainers) { container in
+
+ContainerRow(container: container)
+
+}
+
+ForEach(stoppedContainers) { container in
+
+ContainerRow(container: container)
+
+}
+
+}
+
+```
+
+### Strategy 4: Forced view reconstruction (alternative when retaining LazyVStack)
+
+````swift
+
+LazyVStack{
+
+ForEach(containers) { container in
+
+ContainerRow(container: container)
+
+.id("\(container.id)_\(container.state)_\(container.isTransitioning)")
+
+// id change → cache failure → forced reconstruction
+
+}
+
+}
+
+```
+
+> ⚠️ This will cause the view to be destroyed and rebuilt instead of updated, losing the animation transition effect, and additional performance overhead. Use only when necessary.
+
+---
+
+## V. Selection decision tree
+
+```
+
+The size of the list?
+
+├─ < 100 items → Use VStack directly, simple and reliable
+
+├─ 100 ~ 1000 items → LazyVStack, but the correctness of Equatable needs to be strictly guaranteed
+
+└─ > 1000 items → LazyVStack + Force refresh with .id() if necessary
+
+Is there any element movement across Section/ForEach?
+
+├─ Yes → Give priority to VStack; if it must be Lazy, ensure that Equatable is complete + test cache behavior
+
+└─ No → LazyVStack Safe Use
+
+```
+
+---
+
+## VI. Summary
+
+When you encounter the following phenomena, give priority to troubleshooting the view cache problem of LazyVStack:
+
+- The data has been updated correctly, but the UI has not been refreshed.
+
+- Switch the page/Tab and cut it back to normal.
+
+- UI residue occurs when the same element moves between different sections
+
+Sorting order:
+
+1. Does `Equatable` overwrite all UI-related fields?
+
+2. Are the states that affect the UI all concentrated in the model (not external parameters)?
+
+3. Is there a cross-ForEach element movement + LazyVStack cache reuse?
