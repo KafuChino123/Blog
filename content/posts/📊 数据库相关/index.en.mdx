@@ -1,0 +1,337 @@
+# 📊 Database related
+
+## **I. What is Transaction**
+
+Https://chatgpt.com/share/694a9c6b-1b88-8011-9f39-7a1422727c74
+
+**Transaction** is a collection of a set of operations, which is either **all successful** or **all failed rollback**.
+
+Typical examples (transfer):
+
+```
+
+A deduct 100
+
+B plus 100
+
+```
+
+If only A is deducted, no money is added to B - **Disaster**
+
+The purpose of the transaction is to prevent this "intermediate state" from being seen by the system.
+
+---
+
+## **II. Which are the four ACIDs? **
+
+> **A C I D** = **Atomicity / Consistency / Isolation / Durability**
+
+These four are **the database's commitment to transactions**.
+
+---
+
+## **III. Atomicity - Either do it all or don't do it all**
+
+### **1️⃣ Definition**
+
+The operation in the transaction **can no longer be divided**:
+
+- Success: All operations take effect
+
+- Failure: All operations are canceled
+
+### **2️⃣ Example**
+
+```
+
+BEGIN;
+
+UPDATE account SET balance = balance - 100 WHERE id = 'A';
+
+UPDATE account SET balance = balance + 100 WHERE id = 'B';
+
+COMMIT;
+
+```
+
+If the machine goes down in the middle:
+
+- A money has been deducted
+
+- B hasn't added money yet
+
+➡️ **Atomic requirements: roll back in both steps**
+
+---
+
+### **3️⃣ How to achieve it? ( Core: Undo Log)**
+
+The database will record:
+
+```
+
+A turned out to be 1000
+
+```
+
+If the transaction fails:
+
+```
+
+Rollback: A = 1000
+
+```
+
+👉 **Undo Log = Backlog**
+
+---
+
+### **4️⃣ Key points (many people confuse)**
+
+❌ Atomicity ≠ One SQL
+
+✔️ Atomicity is **multiple operations of a transaction**
+
+---
+
+## **IV. Consistency - Data is always legal**
+
+### **1️⃣ Definition**
+
+Before and after the transaction, **the database from one legal state → another legal state**
+
+> Consistency is more at the level of "**business + constraint**"
+
+---
+
+### **2️⃣ Example**
+
+**Invariant**:
+
+```
+
+A.balance + B.balance = constant
+
+```
+
+Before and after the execution of the transaction, this condition must be established.
+
+---
+
+### **3️⃣ Who will guarantee the consistency? **
+
+This is a **joint responsibility**:
+
+|**Level**|**Responsibility**|
+
+|---|---|
+
+|Database|External Key / NOT NULL / CHECK|
+
+|Application|Business logic is correct|
+
+| Affairs | Ensure that the intermediate state is not exposed |
+
+📌 **Consistency is not "automatically sent" by the database**
+
+---
+
+### **4️⃣ Common misunderstandings**
+
+❌ "If there is ACID, it must be the same"
+
+✔️ **Your business is wrong, and it is still inconsistent**
+
+---
+
+## **V. Isolation (isolation) - Transactions do not interfere with each other**
+
+This is the most complicated, most important, favorite part of the interview**.
+
+---
+
+### **1️⃣ Definition**
+
+When the parallel transaction is executed:
+
+> One transaction **can't see** the intermediate state of another transaction
+
+---
+
+### **2️⃣ What will happen if there is no isolation? **
+
+Three-piece set of current problems:
+
+#### **❌ Dirty Read**
+
+Read **unsubmitted data**
+
+#### **❌ Non-repeatable Read**
+
+In the same transaction, the results of two readings are different.
+
+#### **❌ Phantom Read**
+
+One more line / one less line (range change)
+
+---
+
+### **3️⃣ 4 isolation levels of SQL standard**
+
+|**Quarantine level**|**Dirty reading**|**Cannot be repeated reading**|**Phantom reading**|
+
+|---|---|---|---|---|
+
+|Read Uncommitted|❌|❌|❌|
+
+|Read Committed|✅|❌|❌|
+
+|Repeatable Read|✅|✅|❌|
+
+|Serializable|✅|✅|✅|
+
+> In practice **MySQL default Repeatable Read**
+
+> **PostgreSQL Default Read Committed**
+
+---
+
+### **4️⃣ How to achieve quarantine? ( Core)**
+
+#### **🔒 Lock (Lock)**
+
+- Line lock / watch lock
+
+- Exclusive Lock / Shared Lock
+
+#### **🕰 MVCC (multi-version concurrent control)**
+
+- Multiple versions per line
+
+- Reading is "Historical Snapshot"
+
+📌 **Modern databases almost all rely on MVCC + a small number of locks**
+
+---
+
+### **5️⃣ Engineering Perspective**
+
+- The higher the isolation level → the worse the performance
+
+- Most systems **will not use Serializable**
+
+---
+
+## **VI. Durability (Durability) - Submission will not be lost**
+
+### **1️⃣ Definition**
+
+Once the transaction is submitted:
+
+> Even if **freeze / power outage / crash **, the data will not be lost.
+
+---
+
+### **2️⃣ How to achieve it? ( Core: Redo Log / WAL)**
+
+Write logs sequentially:
+
+```
+
+UPDATE A=900
+
+```
+
+Then write the disk data page.
+
+After the collapse:
+
+- Replay through **Redo Log**
+
+---
+
+### **3️⃣ Real-life Choose-Ming**
+
+Many databases allow:
+
+```
+
+Commit, but the log hasn't really landed yet.
+
+```
+
+➡️ Change the performance
+
+➡️ **Sacrifice a little persistence**
+
+---
+
+## **VII. The relationship between ACID (key points)**
+
+|**Attributes**|**Folns**|
+
+|---|---|
+
+|A|Rollback|
+
+|C|Business is correct|
+
+|I|Concurrency|
+
+|D|Collapse|
+
+📌 **Isolation is the most complicated**
+
+📌 **Consistency is the most easily misunderstood**
+
+---
+
+## **VII. "ACID incomplete" in the real world**
+
+### **1️⃣ Distributed System**
+
+- CAP conflict
+
+- 2PC/Saga/TCC
+
+### **2️⃣ NoSQL**
+
+- The most common is **BASE**
+
+- Final consistency
+
+---
+
+## **IX. How should you use ACID in the project? ( Practical suggestions)**
+
+### **✅ When must the business**
+
+- Money
+
+- Inventory
+
+- State machine migration
+
+### **⚠️ Notes**
+
+- The business is as short as possible**
+
+- Don't be in the business:
+
+- Network request
+
+- Long-term calculation
+
+---
+
+## **Ten. One sentence summary (for you to recite)**
+
+> **ACID is the four commitments of the database to the transaction:**
+
+- > **A**: Failure can roll back
+
+- > **C**: Both before and after are legal
+
+- > **I**: Concurrent does not interfere with each other
+
+- > **D**: Submission will not be lost
