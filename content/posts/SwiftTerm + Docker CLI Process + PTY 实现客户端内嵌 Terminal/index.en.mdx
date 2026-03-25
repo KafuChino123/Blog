@@ -1,0 +1,1009 @@
+# SwiftTerm + Docker CLI Process + PTY implements client-embedded Terminal
+
+##1. Brief account
+
+This document records in detail the complete technical scheme for integrating Container Terminal functions in macOS SwiftUI applications, including the basis for scheme selection, system architecture, core implementation details, and key problems and solutions encountered in the development process.
+
+---
+
+## two Scheme selection
+
+### 2.1 Final Plan: SwiftTerm + Docker CLI Process + PTY
+
+| Components | Selection | Description |
+
+| ------| ---------------------------------- | -------------------------|
+
+| Terminal Simulator | SwiftTerm (migueldeicaza/SwiftTerm) | Mature VT100/Xterm Terminal Simulator Library |
+
+| Container connection | `docker exec -it` via `Process` | Call Docker CLI through the system process |
+
+| I/O Channel | PTY (Pseudo-Terminal) | Create a pseudo-terminal with `openpty()` to achieve two-way interaction |
+
+### 2.2 Reasons for selecting SwiftTerm
+
+SwiftTerm is by Miguel de Icaza (Mono / Xamarin / . The open-source terminal simulator library maintained by the founder of NET provides the following core capabilities:
+
+- **Complete ANSI/VT100/Xterm escape sequence support**: including the analysis and rendering of standard sequences such as CSI (Control Sequence Introducer), OSC (Operating System Command), DCS (Device Control String)
+
+- **24-bit True Color**: Support `\e[38;2;r;g;bm` foreground and `\e[48;2;r;g;bm` background color
+
+- **Cursor Management**: Cursor Move, Save/Restore, Visibility Switch, Shape Change
+
+- **Unicode full support**: including Extended Grapheme Clusters (such as emoji combination sequence 👨‍👩‍👧‍👦), CJK wide characters, two-way text
+
+- **Scrollback Buffer**: Configurable historical rollback buffer
+
+- **Selection & Copy**: Mouse to select text, copy and paste
+
+- **AppKit / UIKit dual platform**: Provide native `NSView` / `UIView` subclass
+
+The library has been adopted by many commercial products, including Secure Shellfish, CodeEdit, La Terminal, etc., and has been fully verified in production.
+
+> ** Supplement: What is VT100 terminal simulation? **
+
+>
+
+> VT100 is a video terminal launched by DEC (Digital Equipment Corporation) in 1978 and has become the de facto terminal standard. Modern terminal simulators need to analyze hundreds of control sequences to achieve:
+
+>
+
+> - Cursor positioning (such as `\e[10;20H` move to column 20 of line 10)
+
+> - Text style (bold, italic, underlined, flashing, inverted)
+
+> - Screen area operation (scrolling area, erase row/screen)
+
+> - Character set switching (G0/G1/G2/G3)
+
+> - Mouse event report
+
+> - Window title setting
+
+>
+
+> It takes 6-12 months to fully develop these functions from scratch, and it is difficult to achieve perfect compatibility with mainstream shell tools (vim, tmux, htop, etc.).
+
+### 2.3 Docker exec + PTY scheme (vs Docker API)
+
+**Comparison of plans:**
+
+| Dimension | Docker CLI + PTY | Docker Engine API |
+
+|-------|----------------|--------------------|
+
+| Connection method | `Process` run `docker exec -it` | HTTP POST `/containers/{id}/exec` + WebSocket/HTTP hijack |
+
+| Realization complexity | Low: standard POSIX PTY + Process | High: need to handle HTTP connection upgrade, stream multiplexing (stdin/stdout/stderr multiplexing) |
+
+| TTY Support | Native: Docker CLI automatically processes TTY negotiation | Need to manually set `Tty: true` and process raw stream |
+
+| Window size adjustment | `ioctl(TIOCSWINSZ)` directly affects PTY | Additional call `POST /exec/{id}/resize` API |
+
+| Dependency | Requires host to install Docker CLI | Only need to access Docker socket (`/var/run/docker.sock`) |
+
+| Error handling | CLI provides user-friendly error messages | Need to parse API error responses by yourself |
+
+The core reason for choosing Docker CLI + PTY is that the implementation is simple, the behavior is consistent with the user's experience in the native Terminal.app, and the TTY handling of Docker CLI is very mature.
+
+> ** Supplement: What is PTY (Pseudo-Terminal)? **
+
+>
+
+> PTY is an inter-process communication mechanism in the Unix/POSIX system, which simulates the behavior of physical terminal devices. It consists of a pair of file descriptors:
+
+>
+
+> - **Master terminal** (ptmx): held by the terminal simulator, responsible for reading the sub-process output and writing to user input
+
+> - **Slave end** (pts): held by the sub-process, the sub-process thinks that it is communicating with a real terminal.
+
+>
+
+>````
+
+> ┌─────────────┐ ┌───────────┐ ┌───────────┐
+
+> │ SwiftTerm │ ←→ │ PTY Master │ ←→ │ PTY Slave │ ←→ docker exec
+
+> │ (UI rendering) │ │ (fd: master)│ │ (fd: slave) │ (subprocess)
+
+> └───────────┘ └───────────┘ └────────────┘
+
+>````
+
+>
+
+> The key difference between using PTY instead of ordinary pipe:
+
+> - PTY supports `TIOCSWINSZ` ioctl to notify sub-process window size changes
+
+> - PTY provides line discipline function
+
+> - PTY makes `isatty()` of the child process return `true`, thus enabling interactive behavior (such as color output, progress bar)
+
+> - The `-it` parameter of `docker exec` requires stdin to be a TTY, otherwise an error will be reported.
+
+---
+
+## three. Architecture design
+
+### 3.1 Overall architecture diagram
+
+```
+
+┌────────────────────────────────────────────┐
+
+│ SwiftUI Layer│
+
+│ ┌────────────────────────────────────────┐ │
+
+│ │ ContainerTerminalTab │ │
+
+│ │ (Shell Selector / Disconnection / Theme Color Matching / Status View) │ │
+
+│ └────────────────────┬───────────────────────┘ │
+
+│││
+
+│ ┌──────────────────▼─────────────────────────┐ │
+
+│ │ SwiftTermView (NSViewRepresentable) │ │
+
+│ │ ┌──────────────────────────────────────┐ │ │
+
+│ │ │ Coordinator (holds strong ref to bridge) │ │ │
+
+│ │ └────────────────────────────────────────┘ │ │
+
+│ └────────────────────┬───────────────────────┘ │
+
+└──────────────────────┼────────────────────────┘
+
+│
+
+┌──────────────────────▼────────────────────────┐
+
+│TerminalView (AppKit NSView)│
+
+│ Native terminal rendering view provided by SwiftTerm │
+
+│││
+
+│terminalDelegate (weak)│
+
+│↓│
+
+│TerminalBridge│
+
+│ (TerminalViewDelegate Implementation) │
+
+└──────────────────────┬──────────────────────────┘
+
+│
+
+┌──────────────────────▼────────────────────────┐
+
+│ Docker Terminal Session │
+
+│(MainActor, ObservableObject)│
+
+││
+
+│┌───────────────┐┌────────────┐┌────────────┐ │
+
+│ │ PTY master/slave│ │ Process │ │ Read Task │ │
+
+│ │ (openpty) │ │ (docker exec) │ │ (async I/O) │ │
+
+│ └────────┬──────┘ └──────┬─────┘ └─────┬──────┘ │
+
+│││││
+
+│ └────────────────┼──────────────┘ │
+
+│↓│
+
+│ docker exec -it <id> /bin/sh │
+
+└──────────────────────────────────────────────┘
+
+```
+
+### 3.2 Core Document Responsibilities
+
+| Documents | Responsibilities | Key Class/Structure |
+
+|-----|-----|------------|
+
+| `SwiftTermView.swift` | NSViewRepresentable bridge layer, embed AppKit's TerminalView into SwiftUI | `SwiftTermView`, `Coordinator` |
+
+| `DockerTerminalSession.swift` | Terminal Session Management: PTY Creation, Process Life Cycle, Two-way I/O, resize Processing, Docker CLI Path Discovery | `DockerTerminalSession` |
+
+| `ContainerTerminalTab.swift` | UI Display Layer: Shell Selector, Connect/Disconnect Button, Light Theme Color, Container Stop Status Prompt | `ContainerTerminalTab` |
+
+| `TerminalLine.swift` | Share the data model and use it for `ImageTerminalTab` | `TerminalLine` |
+
+### 3.3 Data flow
+
+```
+
+User keyboard input
+
+│
+
+▼
+
+TerminalView (capture key)
+
+│
+
+▼ terminalDelegate.send(source:data:)
+
+Terminal Bridge
+
+│
+
+▼ session.write(data:)
+
+Docker Terminal Session
+
+│
+
+▼ write (master, data, count)
+
+PTY Master FD ──→ PTY Slave FD ──→ docker exec process
+
+│
+
+(Process produces output)
+
+│
+
+PTY Master FD ←── PTY Slave FD ←──────────┘
+
+│
+
+▼ read(master, &buffer, bufferSize)
+
+Docker Terminal Session (Read Task)
+
+│
+
+▼ terminalView.feed(byteArray:)
+
+TerminalView (parse the esca sequence → render to the screen)
+
+```
+
+---
+
+## four. Core implementation details
+
+### 4.1 PTY creation and process start
+
+````swift
+
+// Create PTY pair
+
+Var master: Int32 = 0
+
+Var slave: Int32 = 0
+
+Guard openpty(&master, &slave, nil, nil, nil) == 0 else {
+
+Throw TerminalError.ptyCreationFailed
+
+}
+
+// Set the initial window size
+
+Var winSize = winsize(
+
+Ws_row: UInt16(max(rows, 24)),
+
+Ws_col: UInt16(max(cols, 80)),
+
+Ws_xpixel: 0,
+
+Ws_ypixel: 0
+
+)
+
+Ioctl(master, TIOCSWINSZ, &winSize)
+
+// Configure Process
+
+Let process=process()
+
+process.executableURL=dockerCLIPath
+
+Process.arguments = ["exec", "-it", containerID, shell]
+
+process.standardInput = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+
+process.standardOutput = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+
+process.standardError = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+
+Try process.run()
+
+// The slave end has been held by the child process, and the parent process closes its own copy.
+
+Close (slave)
+
+```
+
+> **Supplement: `openpty()` function detailed explanation**
+
+>
+
+> ```c
+
+> int openpty(int *amaster, int *aslave, char *name,
+
+> const struct termios *termp,
+
+> const struct winsize *winp);
+
+>````
+
+>
+
+> - `amaster`: output parameters and receive master file descriptors
+
+> - `aslave`: output parameters, receive slave-end file descriptor
+
+> - `name`: If it is not NULL, receive the slave device path (such as `/dev/pts/3`)
+
+> - `termp`: Initial terminal attributes (baud rate, echo mode, etc.), pass NULL to use the default value
+
+> - `winp`: initial window size, pass NULL and then set through ioctl
+
+>
+
+> It is a standard practice to turn off slave fd in the parent process - the child process already holds its own copy of slave fd by inheriting, and the parent process only needs to read and write through master fd.
+
+### 4.2 Asynchronous reading loop
+
+````swift
+
+readTask = Task.detached { [weak self] in
+
+Let fd=master
+
+Let bufferSize=4096
+
+Var buffer = [UInt8](repeating: 0, count: bufferSize)
+
+While! Task.isCancelled {
+
+Let bytesRead=read(fd, &buffer, bufferSize)
+
+If bytesRead <= 0 { break }
+
+Let data = Array(buffer[0..<bytesRead])
+
+Await MainActor.run { [weak self] in
+
+self?.terminalView?.feed(byteArray: data)
+
+}
+
+}
+
+// Cleanup after the process
+
+Await MainActor.run { [weak self] in
+
+Self?.disconnect()
+
+}
+
+}
+
+```
+
+> ** Supplement: Why use `Task.detached` instead of ordinary `Task`? **
+
+>
+
+> `read()` is a **blocking system call** - when there is no readable data on the PTY master end, it will hang the current thread until the data arrives. If executed in the `@MainActor` context, it will block the UI thread and cause the interface to freeze.
+
+>
+
+> `Task.detached` creates an unstructured task that does not inherit the current actor context. It will be executed in the global thread pool of Swift Concurrency to avoid blocking the main thread. After reading the data, cut back to the main thread to update the UI through `MainActor.run`.
+
+### 4.3 Window size synchronization (Resize)
+
+````swift
+
+Func resize(cols: Int, rows: Int) {
+
+Guard cols > 0, rows > 0 else { return }
+
+Var winSize = winsize(
+
+Ws_row: UInt16(rows),
+
+Ws_col: UInt16(cols),
+
+Ws_xpixel: 0,
+
+Ws_ypixel: 0
+
+)
+
+ioctl(masterFD, TIOCSWINSZ, &winSize)
+
+}
+
+```
+
+When SwiftTerm's `TerminalView` detects a change in the size of the view, it will notify the new column number through the delegate callback. `DockerTerminalSession` passes this information to PTY through `ioctl(TIOCSWINSZ)`, and the PTY kernel driver will then send a `SIGWINCH` signal to the sub-process to notify it to re-query the terminal size and refresh the layout.
+
+> **SUPPLEMENT: SIGWINCH SIGNAL TRANSMISSION LINK**
+
+>
+
+>````
+
+> TerminalView size change
+
+>→ delegate.sizeChanged(cols, rows)
+
+>→ioctl(master, TIOCSWINSZ, &winSize)
+
+> → Kernel updates the winsize structure of PTY
+
+> → The kernel sends SIGWINCH to the slave-end foreground process group
+
+> → docker exec received the signal
+
+> → Shell (such as bash) in the container calls ioctl(TIOCGWINSZ) to get a new size
+
+> → shell notification ncurses application (vim/htop, etc.) redraw
+
+>````
+
+### 4.4 Docker CLI Path Discovery
+
+The path of Docker Desktop for macOS installation CLI is not fixed and needs to be searched by priority:
+
+````swift
+
+Static func findDockerCLI() -> URL? {
+
+Let candidates=[
+
+"/Usr/local/bin/docker",
+
+"/Opt/homebrew/bin/docker",
+
+"/Applications/Docker.app/Contents/Resources/bin/docker",
+
+// Rancher Desktop, Colima and other alternatives
+
+"/Usr/local/bin/nerdctl"
+
+]
+
+Return candidates
+
+.Map {URL(fileURLWithPath: $0)}
+
+.First { FileManager.default.isExecutableFile(atPath: $0.path)}
+
+}
+
+```
+
+---
+
+## five. Problems and solutions
+
+### 5.1 TerminalBridge was immediately released by ARC
+
+**Problem description:**
+
+SwiftTerm's `TerminalView.terminalDelegate` attribute is declared as `weak` reference (this is the standard practice of delegate mode to prevent circular reference). Initially, the bridge object was created directly in the `makeNSView` closure:
+
+````swift
+
+// ❌ Wrong writing
+
+Func makeNSView(context: Context) -> TerminalView {
+
+Let tv=TerminalView()
+
+tv.terminalDelegate = TerminalBridge(session: session) // Temporary object, immediately released
+
+Return TV
+
+}
+
+```
+
+The `TerminalBridge` instance is a temporary local variable. There is no strong reference to hold it. After the method is returned, ARC will be recovered immediately. `terminalDelegate` becomes `nil` as a weak reference, causing all keyboard inputs to be discarded.
+
+**Try Plan 1: `@State` Storage (Failure)**
+
+````swift
+
+// ❌ Unreliable
+
+@State private var terminalBridge: TerminalBridge?
+
+Func makeNSView(context: Context) -> TerminalView {
+
+Let bridge = TerminalBridge(session: session)
+
+terminalBridge = bridge // Modify @State during rendering, which may be discarded by SwiftUI
+
+//...
+
+}
+
+```
+
+Modifying `@State` during the execution of `makeNSView` (i.e. view rendering phase) is an undefined behavior. The rendering pipeline of SwiftUI may discard this state change, resulting in the bridge still not being held.
+
+> **Supplement: State change problem in the rendering stage of SwiftUI**
+
+>
+
+> SwiftUI's view updates follow a strict life cycle:
+
+> one. **Evaluation Phase**: Calculate body attributes, call `makeNSView` / `updateNSView`
+
+> two. **Commit Phase**: Submit the change to the rendering tree
+
+> three. **Layout Phase**: Calculate the layout
+
+> four. **Render Phase**: Draw to the screen
+
+>
+
+> Modifying `@State` in Evaluation Phase will trigger a new rendering cycle, but SwiftUI may merge or discard this change to avoid an infinite loop. Apple's official document clearly states: "Don't modify state during view rendering."
+
+**Final Plan: Coordinator Mode**
+
+````swift
+
+Class Coordinator: NSObject {
+
+Var bridge: TerminalBridge? // Strong reference, the life cycle is consistent with NSViewRepresentable
+
+Func setupBridge(session: DockerTerminalSession, terminalView: TerminalView) {
+
+Let bridge = TerminalBridge(session: session)
+
+Self.bridge=bridge
+
+terminalView.terminalDelegate = bridge
+
+}
+
+}
+
+Func makeCoordinator() -> Coordinator {
+
+Coordinator()
+
+}
+
+Func makeNSView(context: Context) -> TerminalView {
+
+Let tv=TerminalView()
+
+context.coordinator.setupBridge(session: session, terminalView: tv)
+
+Return TV
+
+}
+
+```
+
+`Coordinator` is a standard mechanism provided by `NSViewRepresentable`. Its life cycle is managed by SwiftUI and consistent with the corresponding NSView. Hold the strong reference of bridge in Coordinator to ensure that delegate is valid throughout the view life cycle.
+
+---
+
+### 5.2 TerminalView does not accept keyboard input
+
+**Problem description:**
+
+AppKit's keyboard event distribution is based on the **First Responder chain**. Only NSView, which becomes the first responder, can receive the `keyDown(_:)` event. SwiftTerm's `TerminalView` will not automatically become the first responder after embedding in SwiftUI.
+
+````swift
+
+// ❌ Wrong timing
+
+Func makeNSView(context: Context) -> TerminalView {
+
+Let tv=TerminalView()
+
+tv.window?.makeFirstResponder(tv) // At this time, tv.window is nil!
+
+Return TV
+
+}
+
+```
+
+When `makeNSView` returns, NSView has not been added to the view hierarchy of window, and `tv.window` is `nil`.
+
+**Solution: Delay to the next RunLoop cycle**
+
+````swift
+
+Func makeNSView(context: Context) -> TerminalView {
+
+Let tv=TerminalView()
+
+// ...setup...
+
+DispatchQueue.main.async {
+
+tv.window?.makeFirstResponder(tv)
+
+}
+
+Return TV
+
+}
+
+```
+
+`DispatchQueue.main.async` executes the closure in the next cycle of the main thread RunLoop. At this time, SwiftUI has completed the assembly of the view hierarchy, and `tv.window` is no longer `nil`.
+
+> **Supplement: AppKit First Responder Mechanism**
+
+>
+
+> AppKit uses **Responder Chain** mode to process events:
+
+>
+
+>````
+
+> NSEvent (keyDown)
+
+> → NSWindow.firstResponder
+
+> → If it is handled, stop spreading
+
+> → Otherwise, it will be passed up along the responder chain
+
+> → NSView.nextResponder (usually superview)
+
+>→... → NSWindow → NSApplication
+
+>````
+
+>
+
+> An NSView must:
+
+> one. Overwrite `acceptsFirstResponder` and return `true` (SwiftTerm has been implemented)
+
+> two. Explicitly activated by `window.makeFirstResponder(_:)`
+
+>
+
+> In the SwiftUI host environment, because view creation and window mounting are asynchronous, the setting of the first responder must be delayed.
+
+---
+
+### 5.3 UInt16 Negative Value Crash
+
+**Problem description:**
+
+When SwiftTerm's `TerminalView` is created with `frame: .zero`, the `cols` and `rows` of the internal terminal model may return 0 or negative values (before the layout is completed). Swift's `UInt16` initializer will trigger runtime fatal error when receiving negative numbers:
+
+```
+
+Fatal error: Negative value is not representable
+
+```
+
+This is different from the implicit truncation behavior of integer types in C language - Swift checks integer overflows in both debug and release modes.
+
+**Solution: Defensive Boundary Inspection**
+
+````swift
+
+// Provide a reasonable default value when connecting
+
+Func connect(){
+
+Let cols = max(terminal.cols, 80)
+
+Let rows = max(terminal.rows, 24)
+
+//...
+
+}
+
+// filter invalid values in resize callback
+
+Func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+
+Guard newCols > 0, newRows > 0 else { return }
+
+Session.resize(cols: newCols, rows: newRows)
+
+}
+
+```
+
+Use `max()` to ensure that the minimum value is the standard terminal size (80×24), and add guard to filter zero and negative values in the resize callback.
+
+---
+
+### 5.4 deinit cannot access MainActor isolated properties
+
+**Problem description:**
+
+`DockerTerminalSession` is marked as `@MainActor`, which means that all its storage properties are isolated to the main thread. However, Swift's `deinit` is `nonisolated` - it may be executed on any thread (determined by the timing of the last reference release of the ARC).
+
+````swift
+
+@Main Actor
+
+Class DockerTerminalSession: ObservableObject {
+
+Var masterFD: Int32 = -1
+
+Var process: Process?
+
+Var readTask: Task<Void, Never>?
+
+// ❌ Compilation error: Cannot access MainActor-isolated properties from nonisolated context
+
+Deinit {
+
+readTask?.cancel()
+
+If masterFD >= 0 { close(masterFD)}
+
+Process?.terminate()
+
+}
+
+}
+
+```
+
+> **Supplement: Swift Concurrency's Actor isolation and deinit**
+
+>
+
+> Swift 5.5+'s actor isolation model ensures that the attributes of the same actor will not be accessed concurrently. `deinit` is designed as `nonisolated` because the timing of object destruction is determined by ARC and may occur in any thread. If `deinit` is isolated, it needs to be asynchronously scheduled to execute on the corresponding actor, but this means that the object is in a "semi-dead" state in the time window after `deinit` is scheduled and before actual execution, which will introduce new memory security problems.
+
+>
+
+> Swift Evolution proposal SE-0371 discusses this problem. The current consensus is that `deinit` keeps `nonisolated`, and developers need to manage the cleanup logic by themselves.
+
+**Solution: Remove deinit and use explicit disconnect()**
+
+````swift
+
+@Main Actor
+
+Class DockerTerminalSession: ObservableObject {
+
+Func disconnect() {
+
+readTask?.cancel()
+
+readTask=nil
+
+Process?.terminate()
+
+Process=nil
+
+If masterFD >= 0 {
+
+Close (masterFD)
+
+masterFD=-1
+
+}
+
+}
+
+}
+
+```
+
+Trigger `disconnect()` through `.onDisappear` and status changes on the SwiftUI side:
+
+````swift
+
+.onDisappear {
+
+Session.disconnect()
+
+}
+
+.onChange(of: containerState) { newState in
+
+If newState == .stopped {
+
+Session.disconnect()
+
+}
+
+}
+
+```
+
+This model changes the timing of resource cleaning from "uncontrollable ARC recovery" to "controllable business logic trigger", while avoiding actor isolation conflicts.
+
+---
+
+### 5.5 Cincurrent capture problems in Task.detached
+
+**Problem description:**
+
+````swift
+
+// ❌ Compilation warning/error
+
+Func startReading() {
+
+readTask = Task.detached { [weak self] in
+
+Let fd = self?.masterFD // ⚠️ Need to access on MainActor
+
+//...
+
+}
+
+}
+
+```
+
+Accessing the isolated properties of `@MainActor` through `self` in the closure of `Task.detached` violates the concurrency security rules of Swift Concurrency.
+
+**Solution: Pre-capture value type outside the closure**
+
+````swift
+
+Func startReading() {
+
+Let masterForRead = self.masterFD // ✅ Capture the value in the MainActor context
+
+readTask=Task.detached {
+
+Let bufferSize=4096
+
+Var buffer = [UInt8](repeating: 0, count: bufferSize)
+
+While! Task.isCancelled {
+
+Let bytesRead = read(masterForRead, &buffer, bufferSize)
+
+If bytesRead <= 0 { break }
+
+Let data = Array(buffer[0..<bytesRead])
+
+Await MainActor.run { [weak self] in
+
+self?.terminalView?.feed(byteArray: data)
+
+}
+
+}
+
+}
+
+}
+
+```
+
+`masterForRead` is a `Int32` value type, which can be safely used in detached tasks after being captured in the `@MainActor` context. The file descriptor itself is thread-safe (`read` / `write` system call is thread-safe), so this practice is both consistent with the Swift Concurrency rule and POSIX semantically secure.
+
+---
+
+### 5.6 ImageTerminalTab compilation failed
+
+**Problem description:**
+
+In the process of reconstructing `ContainerTerminalTab`, the `TerminalLine` struct originally defined in the file was removed. And `ImageTerminalTab` (the simulated terminal view for Docker Images) still refers to `TerminalLine`, resulting in compilation errors:
+
+```
+
+Cannot find type 'TerminalLine' in scope
+
+```
+
+**Solution: Extract the shared model**
+
+Extract `TerminalLine` into a separate `TerminalLine.swift` file:
+
+````swift
+
+// TerminalLine.swift
+
+Import Foundation
+
+Struct TerminalLine: Identifiable, Equalable {
+
+Let id: UUID
+
+Let text: String
+
+Let timestamp: Date
+
+Let isError: Bool
+
+Init(text: String, isError: Bool = false) {
+
+self.id=UUID()
+
+Self.text=text
+
+Self.timestamp=Date()
+
+self.isError = isError
+
+}
+
+}
+
+```
+
+Both `ContainerTerminalTab` and `ImageTerminalTab` refer to this shared file and follow the **Single Source of Truth** principle.
+
+---
+
+## six Theme and color scheme
+
+ContainerTerminalTab realizes light-colored theme adaptation:
+
+````swift
+
+Func applyLightTheme(to terminalView: TerminalView) {
+
+terminalView.nativeBackgroundColor = NSColor.white
+
+terminalView.nativeForegroundColor = NSColor.black
+
+terminalView.selectedTextBackgroundColor = NSColor.selectedTextBackgroundColor
+
+terminalView.cursorColor = NSColor.black
+
+}
+
+```
+
+SwiftTerm supports the programming setting of ANSI 16 colors, 256 color palettes and default foreground/background colors, which can achieve a terminal appearance consistent with the overall UI style of the application.
+
+---
+
+## seven. Sum up
+
+| Dimension | Actual performance |
+
+|-----|--------|
+
+| Development cycle | About 3-5 days (compared with 6-12 months for self-developed terminal simulators) |
+
+| Compatibility | Fully support vim, nano, htop, tmux and other interactive tools |
+
+| Performance | SwiftTerm native AppKit rendering, high throughput output without stuttering |
+
+| Maintenance cost | Core logic about 400 lines of code, easy to understand and maintain |
+
+Review of key design decisions:
+
+1. **Choose SwiftTerm** instead of self-developed - avoiding the trap of the "iceberg" complexity of the terminal simulator
+
+2. **Choose Docker CLI + PTY** instead of Docker API - greatly reduce the implementation complexity and behave in line with the native terminal
+
+3. **Use Coordinator mode** Manage delegate life cycle - in line with SwiftUI best practices
+
+4. **Explicit disconnect() replaces deinit** - circumventing the actor isolation restriction of Swift Concurrency
+
+Five. **Value type pre-capture** Solve the isolation problem of concurrent closure - concise and POSIX secure
