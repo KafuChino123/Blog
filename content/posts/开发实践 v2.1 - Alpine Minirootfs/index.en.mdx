@@ -1,0 +1,1929 @@
+# Development Practice v2.1 - Alpine Minirootfs
+
+> This document records in detail the complete process of using Alpine Linux minirootfs for direct kernel booting in Apple Virtualization Framework, including all the problems encountered and their solutions.
+
+---
+
+##1. Background and goal
+
+### 1.1 Project Objectives
+
+Add Alpine Linux support to LinuxVMManager as a lightweight choice outside of Ubuntu.
+
+### 1.2 Alpine Mirror Type Introduction
+
+Alpine Linux officially provides a variety of mirror types, each for different usage scenarios:
+
+| Mirror type | File name mode | Size | Main purpose | Contains content |
+
+|---------|---------|--------|--------|---------|
+
+| **Standard ISO** | `alpine-standard-*.iso` | ~180 MB | Full local installation | Kernel + initramfs + basic package + installer |
+
+| **Virtual ISO** | `alpine-virt-*.iso` | ~60 MB | Virtual machine installation | Simplifine kernel + virtualization driver |
+
+| **Cloud Mirroring (UEFI)** | `nocloud_alpine-*-uefi-*.qcow2` | ~170 MB | Cloud Platform (AWS/GCP/Azure) | Complete System + cloud-init |
+
+| **Netboot** | `vmlinuz-virt` + `initramfs-virt` | ~15 MB | Network boot installation | kernel + network installation initramfs |
+
+| **Minirootfs** | `alpine-minirootfs-*.tar.gz` | ~3.7 MB | Container/chroot/Custom System | Pure User Space |
+
+#### What is Minirootfs?
+
+**Minirootfs (Minimal Root Filesystem)** is a minimized root file system compression package, which contains the most basic user space components required to run Alpine Linux:
+
+```
+
+Minirootfs content structure
+
+├── bin/ # basic command (busybox symbol link)
+
+├── etc/ # configuration file
+
+│ ├── apk/ # Package Manager Configuration
+
+│ ├── passwd # User database
+
+│ ├── shadow # password database
+
+│ └── inittab # init configuration
+
+├── lib/ # shared library (musl libc)
+
+├── sbin/ # system command
+
+├── usr/ # user program
+
+└── var/ # variable data
+
+```
+
+**Not included**:
+
+- ❌ Linux kernel
+
+- ❌ Bootloader
+
+-❌Initramfs
+
+- ❌ Kernel module
+
+### 1.3 Why choose Minirootfs
+
+| Features | Minirootfs | Cloud Mirroring | ISO |
+
+|-------|:---------:|:-------:|:---:|
+
+| Volume | ⭐⭐⭐ 3.7 MB | 170 MB | 180 MB |
+
+| No boot dependency | ✅ | ❌ UEFI | ❌ ISO mount |
+
+| No partition table | ✅ | ❌ GPT | ❌ |
+
+| Custom flexibility | ⭐⭐⭐ | ⭐ | ⭐⭐ |
+
+| Direct kernel boot | ✅ Best | ❌ Incompatible | ⚠️ Complex |
+
+| Ready to use out of the box | ❌ Configuration required | ✅ | ✅ |
+
+**Minirootfs is the best choice for direct kernel booting**, because it:
+
+- Pure file system, no UEFI/GPT dependency
+
+- It can be directly put into the bare disk without partition table.
+
+- We control the kernel and initramfs configuration completely.
+
+---
+
+## two Scheme comparison and selection
+
+### 2.1 Tried plans
+
+```
+
+Program evolution path
+
+┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+
+│ Alpine Cloud Mirroring │ ──→ │ Alpine Netboot │ ──→ │ Minirootfs │
+
+│ (UEFI) │ │ (Network Installation) │ │ (Final Plan) │
+
+└───────────────┘ └─────────────┘ └────────────────┘
+
+❌ ⚠️ ✅
+
+GPT/UEFI is not compatible. Requires a continuous network and fits perfectly.
+
+```
+
+| Plan | Result | Reason |
+
+|-------|:----:|--------|
+
+| Alpine Cloud Mirror (UEFI) | ❌ | GPT partition + UEFI initramfs, incompatible with netboot kernel |
+
+| Alpine network installation | ⚠️ | It can work, but it needs the network every time it starts and cannot be used offline |
+
+| **Alpine Minirootfs** | ✅ | Flexible and controllable, perfectly adapted to direct kernel guidance |
+
+### 2.2 Ubuntu Cloud Mirror vs Alpine Minirootfs
+
+| Features | Ubuntu Cloud Mirror | Alpine Minirootfs |
+
+|-------|:------------:|:----------------:|
+
+| **Core source** | Cloud mirroring comes with | Need to download Netboot kernel separately |
+
+| **Rot file system format** | ext4 + MBR partition | ext4 no partition table (whole disk) |
+
+| **root= Parameter** | `/dev/vda1` | `/dev/vda` |
+
+| **initramfs** | Cloud mirror built-in | Need to customize the construction |
+
+| **Driver loading** | Most of the built-in kernels | Modules need to be loaded manually |
+
+| **Configuration Complexity** | ⭐ Low | ⭐⭐⭐ High |
+
+| **Final system size** | ~1 GB | ~8 MB |
+
+| **Startup speed** | Medium | Extremely fast |
+
+---
+
+## three. Final successful configuration
+
+### 3.1 VM Configuration Parameters
+
+```yaml
+
+Kernel: ~/LinuxVM/alpine/vmlinux
+
+Initrd: ~/LinuxVM/alpine/initramfs-custom.gz
+
+Disk: ~/LinuxVM/alpine/alpine-minirootfs.raw
+
+Command Line: console=hvc0 root=/dev/vda rw
+
+CPU: 1-2 cores
+
+Memory: 512 MB - 1 GB
+
+```
+
+### 3.2 Login information
+
+| Project | Value |
+
+|-----|-----|
+
+| Username | `root` |
+
+| Password | *(empty, press Enter directly)* |
+
+### 3.3 Overview of the start-up process
+
+```
+
+┌────────────────────────────────────────────────────┐
+
+│ Apple Virtualization Framework │
+
+│ ↓ Load vmlinux + initramfs-custom.gz │
+
+├──────────────────────────────────────────────────────┤
+
+│ Linux Kernel Startup │
+
+│ ↓ Uncompress initramfs to memory and execute /init │
+
+├──────────────────────────────────────────────────────┤
+
+│ Custom init script │
+
+│ ↓ Load /proc, /sys, /dev │
+
+│ ↓ insmod virtio_blk.ko → /dev/vda appear │
+
+│ ↓ insmod crc16.ko, mbcache.ko, jbd2.ko, ext4.ko │
+
+│ ↓ mount /dev/vda /sysroot │
+
+│ ↓ switch_root /sysroot /sbin/init │
+
+├──────────────────────────────────────────────────────┤
+
+│ BusyBox init (root file system) │
+
+│ ↓ Read /etc/inittab │
+
+│ ↓ Execute sysinit script │
+
+│ ↓ Start getty on hvc0 │
+
+├──────────────────────────────────────────────────────┤
+
+│ Login: root │
+
+└────────────────────────────────────────────────────┘
+
+```
+
+---
+
+## four. Detailed configuration steps
+
+### Step 1: Download the Alpine Netboot kernel
+
+"Bash"
+
+Mkdir -p ~/LinuxVM/alpine && cd ~/LinuxVM/alpine
+
+ALPINE_VERSION="3.21"
+
+NETBOOT_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot"
+
+curl-fLO "${NETBOOT_URL}/vmlinuz-virt"
+
+# Download initramfs (used to extract busybox and basic modules)
+
+Curl -fLO "${NETBOOT_URL}/initramfs-virt"
+
+```
+
+### Step 2: Extract the original kernel
+
+"Bash"
+
+# Check the format - it should be EFI stub
+
+File vmlinuz-virt
+
+# Output: PE32+ executable (EFI application) Aarch64
+
+# Use Python to extract the kernel of gzip compression from EFI stub
+
+Python3 << 'EOF'
+
+With open('vmlinuz-virt', 'rb') as f:
+
+Data=f.read()
+
+# Find gzip magic number (1f 8b 08)
+
+Gzip_magic=b'\x1f\x8b\x08'
+
+Offset=data.find(gzip_magic)
+
+If offset == -1:
+
+print("Error: gzip magic not found!")
+
+Exit(1)
+
+print(f"Found gzip at offset: {offset} (0x{offset:x})")
+
+With open('kernel.gz', 'wb') as f:
+
+F.write(data[offset:])
+
+print("Extracted to kernel.gz")
+
+Eof
+
+# Decompression
+
+Gunzip -c kernel.gz > vmlinux
+
+Rm kernel.gz
+
+# Verification
+
+Vmlinux file
+
+# Output: Linux kernel ARM64 boot executable Image, little-endian, 4K pages
+
+```
+
+### Step 3: Download Minirootfs
+
+"Bash"
+
+MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64"
+
+curl-fLO "${MINIROOTFS_URL}/alpine-minirootfs-3.21.2-aarch64.tar.gz"
+
+Mv alpine-minirootfs-*.tar.gz minirootfs.tar.gz
+
+```
+
+### Step 4: Download the kernel module package
+
+The Alpine virt kernel compiles most of the drivers into modules, and you need to download the kernel module package separately:
+
+"Bash"
+
+# Find the current version of the linux-virt package
+
+# Visit https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64/ to confirm the version number
+
+curl-fLO "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64/linux-virt-6.12.67-r0.apk"
+
+# Unzip the APK package (the essence of APK is tar.gz)
+
+Mkdir -p apk_extract && cd apk_extract
+
+Tar -xzf ../linux-virt-6.12.67-r0.apk
+
+# Unzip all .ko.gz module files
+
+Find. -name "*.ko.gz" -exec gunzip {} \;
+
+CD..
+
+```
+
+> **📦 APK package structure description**
+
+>
+
+> Alpine's `.apk` package is a signed tar.gz archive:
+
+>````
+
+> linux-virt-*.apk
+
+>├──. PKGINFO # Package metadata
+
+>├──. SIGN.RSA. * # Digital signature
+
+> └── lib/modules/ # Actual kernel module
+
+> └── 6.12.67-0-virt/
+
+> └── kernel/
+
+>├──drivers/
+
+>├──fs/
+
+> └──...
+
+>````
+
+### Step 5: Create a disk image
+
+E2fsprogs that need to be installed using Homebrew on macOS:
+
+"Bash"
+
+# Install e2fsprogs (if not)
+
+Brew install e2fsprogs
+
+# Set the mke2fs path (Homebrew will not overwrite the system command)
+
+MKE2FS="/opt/homebrew/opt/e2fsprogs/sbin/mke2fs"
+
+# Create a temporary directory and uncompress minirootfs
+
+TEMP_DIR=$(mktemp -d)
+
+Cd "$TEMP_DIR"
+
+Tar -xzf ~/LinuxVM/alpine/minirootfs.tar.gz
+
+# Configure root passwordless login
+
+# shadow file format: username:password_hash:...
+
+# Will root:!:... Or root:*:... Change to root::...( Empty password)
+
+Sed -i '' 's/^root:[^:]*:/root::/' etc/shadow
+
+Sed -i '' 's/^root:x:/root::/' etc/passwd
+
+```
+
+#### Configure inittab (key steps)
+
+Minirootfs does not include OpenRC, and you need to use BusyBox init to directly manage the startup:
+
+"Bash"
+
+Cat > etc/inittab << 'INITTAB'
+
+# /etc/inittab - BusyBox init configuration
+
+#
+
+# Format: <id>:<runlevels>:<action>:<process>
+
+#
+
+# action type:
+
+# sysinit - Execute once during system initialization
+
+# respawn - Automatically restart after the process exits
+
+# ctrlaltdel - executed when Ctrl+Alt+Del
+
+# shutdown - Execute when shutting down
+
+# ===== System initialization =====
+
+# Create the necessary directory
+
+::Sysinit:/bin/mkdir -p /dev /proc /sys /tmp /run
+
+# Mount the virtual file system
+
+::Sysinit:/bin/mount -t proc none /proc
+
+::Sysinit:/bin/mount -t sysfs none /sys
+
+::Sysinit:/bin/mount -t devtmpfs none /dev
+
+# Create a device subdirectory
+
+::Sysinit:/bin/mkdir -p /dev/pts /dev/shm
+
+::Sysinit:/bin/mount -t devpts devpts /dev/pts
+
+::Sysinit:/bin/mount -t tmpfs tmpfs /dev/shm
+
+# Set the host name
+
+::Sysinit:/bin/hostname alpine
+
+# Start-up completion prompt
+
+::Sysinit:/bin/echo "Alpine Linux started successfully"
+
+# ===== Terminal =====
+
+# Start getty (main interaction mode) in the virtio console
+
+Hvc0::respawn:/sbin/getty -L 115200 hvc0 vt100
+
+# Virtual terminal of the graphic console (requres fbcon module)
+
+Tty1::respawn:/sbin/getty 38400 tty1
+
+# ===== System Control =====
+
+::Ctrlaltdel:/sbin/reboot
+
+::Shutdown:/bin/umount -a -r
+
+INITTAB
+
+```
+
+#### Create an ext4 disk image
+
+"Bash"
+
+# Use the -d option of mke2fs to create mirror images directly from the directory
+
+"$MKE2FS" -t ext4\
+
+-L "alpine-root" \
+
+-D "$TEMP_DIR" \
+
+~/LinuxVM/alpine/alpine-minirootfs.raw\
+
+512M
+
+# Clean up
+
+Rm -rf "$TEMP_DIR"
+
+# Verify mirror image
+
+File ~/LinuxVM/alpine/alpine-minirootfs.raw
+
+# Output: Linux rev 1.0 ext4 filesystem data, ...
+
+```
+
+> **💡 mke2fs -d option description**
+
+>
+
+> The `-d directory` option allows mke2fs to directly fill in the contents of the specified directory when creating a file system, avoiding the traditional process of "create empty mirror image → mount → copy file → uninstall". This is especially useful on macOS because macOS does not natively support mounting ext4.
+
+### Step 6: Create a custom Initramfs
+
+The official `initramfs-virt` is designed for network installation, and we need to create a version suitable for local startup.
+
+#### 6.1 Create a directory structure
+
+"Bash"
+
+Cd ~/LinuxVM/alpine
+
+Mkdir -p custom_initrd/{bin,dev,etc,lib/modules,proc,sys,sysroot,tmp}
+
+```
+
+#### 6.2 Extract the official initramfs content
+
+"Bash"
+
+Mkdir -p initrd_extract && cd initrd_extract
+
+# initramfs is a cpio archive compressed by gzip
+
+Gzip -dc ../initramfs-virt | cpio -idm
+
+CD..
+
+```
+
+#### 6.3 Copy core components
+
+"Bash"
+
+# Copy BusyBox (the implementation of almost all commands)
+
+Cp initrd_extract/bin/busybox custom_initrd/bin/
+
+# Copy kmod (module management tool)
+
+Cp initrd_extract/bin/kmod custom_initrd/bin/
+
+# [Key] Copy musl dynamic linker
+
+Cp initrd_extract/lib/ld-musl-aarch64.so.1 custom_initrd/lib/
+
+```
+
+#### 6.4 Create a BusyBox symbol link
+
+BusyBox is a multifunctional binary file that provides different commands through symbolic links:
+
+"Bash"
+
+Cd custom_initrd/bin
+
+# Create symbolic links for common commands
+
+For cmd in sh ash mount umount switch_root sleep ls cat echo mkdir \
+
+Insmod modprobe grep sed awk uname dmesg mknod ln rm cp mv \
+
+Chmod chown ps kill; do
+
+Ln -sf busybox "$cmd"
+
+Done
+
+CD.. /..
+
+```
+
+> **🔧 How BusyBox works**
+
+>
+
+> BusyBox checks `argv[0]` (the name when the program is called) to decide which function to perform:
+
+>````
+
+> $ ls -la /bin/ls
+
+> lrwxrwx 1 root root 7 /bin/ls -> busybox
+
+>
+
+> $ /bin/ls # argv[0] = "ls" → Execute ls function
+
+> $ /bin/busybox ls # can also be called in this way
+
+>````
+
+#### 6.5 Copy the kernel module
+
+"Bash"
+
+# Copy the basic module from the official initramfs (virtio kernel, etc.)
+
+Cp-r initrd_extract/lib/modules/* custom_initrd/lib/modules/
+
+# Determine the kernel version
+
+KVER="6.12.67-0-virt"
+
+MODDIR="custom_initrd/lib/modules/$KVER/kernel"
+
+# Copy additional required modules from linux-virt.apk
+
+# ext4 file system and its dependencies
+
+Mkdir -p "$MODDIR/lib" "$MODDIR/fs/jbd2" "$MODDIR/fs/ext4" "$MODDIR/fs"
+
+Cp apk_extract/lib/modules/$KVER/kernel/lib/crc16.ko "$MODDIR/lib/"
+
+Cp apk_extract/lib/modules/$KVER/kernel/fs/mbcache.ko "$MODDIR/fs/"
+
+Cp apk_extract/lib/modules/$KVER/kernel/fs/jbd2/jbd2.ko "$MODDIR/fs/jbd2/"
+
+Cp apk_extract/lib/modules/$KVER/kernel/fs/ext4/ext4.ko "$MODDIR/fs/ext4/"
+
+```
+
+### Step 7: Create an Init script
+
+The Init script is the core of initramfs, which is responsible for initializing the environment and switching to the real root file system:
+
+"Bash"
+
+Cat > custom_initrd/init << 'INIT_SCRIPT'
+
+#! /Bin/sh
+
+# Alpine Linux Custom Init Script
+
+# Used for direct kernel booting scenarios
+
+# ===== Stage 1: Basic environment =====
+
+Mount -t proc none /proc
+
+Mount -t sysfs none /sys
+
+Mount -t devtmpfs none /dev
+
+Echo "======================================"
+
+Echo " Alpine Linux Direct Kernel Boot Init"
+
+Echo "======================================"
+
+# ===== Stage 2: Load the kernel module =====
+
+KVER="6.12.67-0-virt"
+
+MODDIR="/lib/modules/$KVER/kernel"
+
+Echo "[1/6] Loading virtio_blk..."
+
+Insmod "$MODDIR/drivers/block/virtio_blk.ko"
+
+# Wait for the device node to be created
+
+Sleep one
+
+# Verify the block device
+
+Echo "Block devices:"
+
+Ls -la /dev/vd* 2>/dev/null || echo " (none found yet)"
+
+Echo "[2/6] Loading crc16..."
+
+Insmod "$MODDIR/lib/crc16.ko"
+
+Echo "[3/6] Loading mbcache..."
+
+Insmod "$MODDIR/fs/mbcache.ko"
+
+Echo "[4/6] Loading jbd2..."
+
+Insmod "$MODDIR/fs/jbd2/jbd2.ko"
+
+Echo "[5/6] Loading ext4..."
+
+Insmod "$MODDIR/fs/ext4/ext4.ko"
+
+# Optional: Load the network driver
+
+Echo "[6/6] Loading virtio_net..."
+
+Insmod "$MODDIR/drivers/net/virtio_net.ko" 2>/dev/null || true
+
+# ===== Stage 3: Mount the root file system =====
+
+Echo ""
+
+Echo "Mounting root filesystem /dev/vda..."
+
+Mkdir -p /sysroot
+
+Mount -t ext4 /dev/vda /sysroot
+
+If [$? -eq 0]; then
+
+Echo "Mount successful!"
+
+Echo ""
+
+Echo "Switching to real root filesystem..."
+
+# Clean up and switch the root directory
+
+Umount /proc /sys /dev 2>/dev/null
+
+Exec switch_root /sysroot /sbin/init
+
+Other
+
+Echo ""
+
+Echo "!!! Mount FAILED!!!"
+
+Echo ""
+
+Echo "Debug information:"
+
+Echo "- Block devices: $(ls /dev/vd* 2>/dev/null || echo 'none')"
+
+Echo "- Loaded modules: $(cat /proc/modules | cut -d' ' -f1 | tr '\n' ' ')"
+
+Echo "- Supported filesystems:"
+
+Cat /proc/filesystems
+
+Echo ""
+
+Echo "Dropping to emergency shell..."
+
+Exec/bin/sh
+
+Fi
+
+INIT_SCRIPT
+
+Chmod 755 custom_initrd/init
+
+```
+
+> **🔄 working principle of switch_root**
+
+>
+
+> `switch_root` is a command specially designed for initramfs:
+
+> one. Main the new root file system to the specified directory
+
+> two. Delete all files in initramfs (free up memory)
+
+> three. Use `pivot_root` or `chroot` to switch to the new root
+
+> four. Execute the init program in the new root
+
+>
+
+> Unlike ordinary `chroot`, `switch_root` will completely release the memory occupied by initramfs.
+
+### Step 8: Package Initramfs
+
+"Bash"
+
+Cd custom_initrd
+
+# Use the newc format of cpio (Linux initramfs standard format)
+
+Find . -print0 | cpio --null -ov --format=newc | gzip-9 > ../initramfs-custom.gz
+
+CD..
+
+# Verification
+
+Ls -lh initramfs-custom.gz
+
+# It should be around 5-10 MB
+
+```
+
+> **📦 Initramfs Format Description**
+
+>
+
+> Linux initramfs uses **cpio newc format** (non-tar):
+
+> - `newc`: SVR4 format, with CRC
+
+> - Optional gzip/xz/lz4 compression
+
+> - Automatically decompress to tmpfs when the kernel starts
+
+---
+
+## five. Troubleshooting record
+
+### 5.1 Init Script Execution Failure (Error -2)
+
+| Project | Content |
+
+|-----|-----|
+
+| **Phenomenon** | `Failed to execute /init (error -2)` / `Kernel panic - not syncing: No working init found` |
+
+| **Error code** | `-2` = `ENOENT` (No such file or directory) |
+
+| **Root cause** | BusyBox is a dynamic link and lacks musl dynamic linker |
+
+**Analysis**:
+
+"Bash"
+
+$ file busybox
+
+Busybox: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV),
+
+Dynamically linked, interpreter /lib/ld-musl-aarch64.so.1, ...
+
+```
+
+When the kernel tries to execute `/init` (shell script), the shell interpreter `/bin/sh` (busybox symbolic link) needs a dynamic linker. If `/lib/ld-musl-aarch64.so.1` does not exist, `ENOENT` will be reported.
+
+**Solve**:
+
+"Bash"
+
+Cp initrd_extract/lib/ld-musl-aarch64.so.1 custom_initrd/lib/
+
+```
+
+---
+
+### 5.2 Command not found
+
+| Project | Content |
+
+|-----|-----|
+
+| **phenomenon** | `/init: line 9: uname: not found` |
+
+| **Reason** | BusyBox contains these commands, but requires symbolic links |
+
+**Solve**:
+
+"Bash"
+
+Cd custom_initrd/bin
+
+For cmd in uname dmesg grep ls cat ...; do
+
+Ln -sf busybox "$cmd"
+
+Done
+
+```
+
+---
+
+### 5.3 Block-free device (virtio_blk module not loaded)
+
+| Project | Content |
+
+|-----|-----|
+
+| **Phenomenon** | `Block devices: (none)` |
+
+| **Reason** | `virtio_blk` in the Alpine virt kernel is a module, not a built-in |
+
+**Comparison**:
+
+| Driver | Ubuntu generic | Alpine virt |
+
+|-------|:-------------:|:-----------:|
+
+| virtio_pci | Built-in | Built-in |
+
+| virtio_blk | Built-in | **Module** |
+
+| virtio_net | Built-in | **Module** |
+
+**Solve**: Manually load the module in the init script
+
+---
+
+### 5.4 ext4 file system is not supported
+
+| Project | Content |
+
+|-----|-----|
+
+| **Phenomenon** | `mount: mounting /dev/vda on /sysroot failed: No such device` + `/proc/filesystems` no ext4 |
+
+| **Reason** | Ext4 in the Alpine virt kernel is a module; netboot initramfs does not contain (it uses squashfs) |
+
+**Solve**: Extract the ext4 module from `linux-virt.apk`
+
+---
+
+### 5.5 ext4 module failed to load - lack of dependency
+
+| Project | Content |
+
+|-----|-----|
+
+| **Phenomenon** | `ext4: Unknown symbol mb_cache_create (err -2)` / `ext4: Unknown symbol crc16 (err -2)` |
+
+| **Reason** | ext4 depends on other modules |
+
+**Ext4 module dependency chain**:
+
+```
+
+Ext4.ko
+
+├── jbd2.ko (Journing Block Device 2)
+
+├── mbcache.ko (Metadata Block Cache)
+
+└── crc16.ko (CRC16 verification algorithm)
+
+```
+
+**Solve**: Load in the order of dependency (load the dependent first):
+
+"Bash"
+
+Insmod crc16.ko #1. No dependence
+
+Insmod mbcache.ko #2. No dependence
+
+Insmod jbd2.ko #3. No dependence
+
+Insmod ext4.ko # 4. Rely on the above three
+
+```
+
+---
+
+### 5.6 OpenRC is not installed
+
+| Project | Content |
+
+|-----|-----|
+
+| **Phenomenon** | `can't run '/sbin/openrc': No such file or directory` |
+
+| **Reason** | Minirootfs is the smallest system and does not include OpenRC init system |
+
+**Alpine's init system options**:
+
+| Init System | Included in | Functions |
+
+|-----------|--------|--------|
+
+| BusyBox init | minirootfs ✅ | Basic process management, read /etc/inittab |
+
+| OpenRC | Need to be installed | Service management, running level |
+
+| systemd | Not supported | Alpine does not use systemd |
+
+**Solve**: Modify `/etc/inittab` to use the native function of BusyBox init
+
+---
+
+### 5.7 Root password is locked
+
+| Project | Content |
+
+|-----|-----|
+
+| **Phenomenon** | `Login incorrect` (use empty password) |
+
+| **Reason** | The root account in Minirootfs is locked |
+
+**/Etc/shadow format analysis**:
+
+```
+
+Root:!::0:::::
+
+││
+
+│ └── Password field
+
+│ "!" Or "*" = account lock
+
+│ Empty = No password (allow empty password to log in)
+
+│ "$6$salt$hash" = SHA-512 hash password
+
+│
+
+└── User name
+
+```
+
+**Solve**:
+
+"Bash"
+
+# Replace the lock mark with empty (allow login without password)
+
+Sed-i's/^root:[^:]*:/root::/' etc/shadow
+
+```
+
+---
+
+## six In-depth technical analysis
+
+### 6.1 Alpine Virt Kernel Modularization Strategy
+
+The Alpine virt kernel pursues minimization and compiles all non-start-essential drivers into modules:
+
+| Component Category | Specific Module | Ubuntu generic | Alpine virt |
+
+|----------|---------|:-------------:|:------------:|
+
+| **Storage** | virtio_blk | Built-in | Module |
+
+| | virtio_scsi | Built-in | Module |
+
+| **Network** | virtio_net | Built-in | Module |
+
+| **Display** | virtio-gpu | Built-in | Module |
+
+| | DRM core | Built-in | Module |
+
+| **File System** | ext4 | Built-in | Module |
+
+| | xfs | Built-in | Module |
+
+| | btrfs | Built-in | Module |
+
+**Influence**:
+
+- ✅ Kernel binary is smaller (~15 MB vs ~50 MB)
+
+- ✅ Lower memory usage
+
+- ❌ must use initramfs containing the correct module
+
+- ❌ Inter-module dependencies need to be handled correctly
+
+### 6.2 musl libc vs glibc
+
+| Features | musl libc (Alpine) | glibc (Ubuntu) |
+
+|-------|:-----------------:|:-------------:|
+
+| **Design Objectives** | Concise, Correct, Safe | Complete Functions, Compatibility |
+
+| **Code volume** | ~100K line | ~1M+ line |
+
+| **Static link volume** | ~600 KB | ~2 MB+ |
+
+| **Dynamic linker** | `ld-musl-*.so.1` | `ld-linux-*.so.2` |
+
+| **POSIX COMPATIBILITY** | STRICT | WITH EXTENSION |
+
+| **NSS Support** | Not Supported | Support |
+
+| **locale Support** | Basic (UTF-8) | Complete |
+
+**Actual impact**:
+
+- Some glibc-specific software on Alpine may need to be adjusted.
+
+- The error message of musl is usually more accurate.
+
+- Some DNS resolution behaviors may be different
+
+### 6.3 Comparison of disk partition schemes
+
+| Scheme | Structure | root= Parameter | Create complexity |
+
+|-------|-----|-----------|-----------|
+
+| Ubuntu Cloud Mirroring | MBR + 1 Partition | `/dev/vda1` | Low |
+
+| Alpine UEFI Cloud Mirror | GPT + 2 Partition | `/dev/vda2` | Middle |
+
+| **Alpine Minirootfs** | **No partition table** | `/dev/vda` | **Minimum** |
+
+**Detailed explanation of the no-zoning table scheme**:
+
+```
+
+Traditional scheme (with partition table) Minirootfs scheme (no partition table)
+
+┌────────────────┐┌────────────────┐
+
+│ MBR/GPT Header │ │ │
+
+├────────────────┤││
+
+│ Partition 1 │ │ The whole disk is │
+
+│ (File System) │ │ ext4 File System │
+
+├────────────────┤││
+
+│ (More partitions can be selected) │ │ root=/dev/vda │
+
+└────────────────┘ │ │
+
+└──────────────────┘
+
+```
+
+**Advantages**:
+
+- No need for partitioning tools
+
+- Simple configuration (root=/dev/vda)
+
+- mke2fs -d can be created directly on macOS
+
+### 6.4 BusyBox Init vs OpenRC
+
+```
+
+BusyBox init Startup Process OpenRC Startup Process
+
+──────────────────────────────────
+
+Read /etc/inittab BusyBox init start
+
+↓↓
+
+Execute sysinit entry execute /sbin/openrc
+
+↓↓
+
+Start the respawn process and start the service in order of dependency
+
+(Getty) ↓
+
+↓ Start getty
+
+Wait for the process to exit and restart
+
+```
+
+For the smallest environment of minirootfs, BusyBox init is enough to use without the service management function of OpenRC.
+
+---
+
+## seven. Serial console and graphic console
+
+### 7.1 Overview of Console Types
+
+In Linux systems, **Console** is a text interface for users to interact with the system. According to the physical connection method, it is mainly divided into two categories:
+
+| Console Type | Working Mode | Typical Equipment | Main Use |
+
+|-----------|--------|--------|------------|
+
+| **Graphic Console** | Interactive via monitor + keyboard | `tty1` - `tty6` | Local physical access, desktop environment |
+
+| **Serial Port Console** | Transmit text data through serial port | `ttyS0`, `hvc0` | Remote management, virtualization, embedded |
+
+```
+
+Graphic Console Serial Console
+
+┌─────────────┐ ┌───────────┐
+
+│ Display │ ← Display Output │ Terminal Software │ ← Display Output
+
+├───────────┤├───────────┤
+
+│ Keyboard │ → Keyboard input │ Keyboard │ → Keyboard input
+
+└──────┬──────┘ └──────┬──────┘
+
+│ (Graphic Card + USB/PS2) │ (Serial Cable/Network)
+
+▼▼
+
+┌─────────────┐ ┌───────────┐
+
+│ Linux System │ │ Linux System │
+
+│ /dev/tty1 │ │ /dev/ttyS0 │
+
+└────────────┘ └─────────┘
+
+```
+
+### 7.2 Linux TTY Device Naming Specification
+
+Terminal devices in Linux follow specific naming specifications:
+
+| Device name | Full name | Description |
+
+|--------|-----|--------|
+
+| `/dev/tty0` | - | Currently active virtual terminal (pointing to one of tty1-tty6) |
+
+| `/dev/tty1` - `tty6` | Virtual Terminal | Multiple sessions of the graphics console can be switched with Ctrl+Alt+F1~F6 |
+
+| `/dev/ttyS0` - `ttySn` | Serial Port | Traditional serial port, corresponding to physical UART or analog 16550 |
+
+| `/dev/ttyUSB0` | USB Serial | USB to serial adapter |
+
+| `/dev/ttyAMA0` | ARM PrimeCell UART | ARM platform native serial port (such as Raspberry Pi) |
+
+| `/dev/hvc0` - `hvcN` | Hypervisor Virtual Console | **High-efficiency console for virtual machines** |
+
+| `/dev/console` | System Console | System Console, default output of kernel messages |
+
+### 7.3 What is hvc0
+
+**Hvc** (Hypervisor Virtual Console) is an efficient console device designed for virtualized environments.
+
+#### 7.3.1 The origin and development of hvc
+
+| Period | Event |
+
+|-----|-----|
+
+| Early 2000s | IBM develops LPAR (logical partition) for pSeries/System p server |
+
+| 2005+ | Xen virtualization adopts and becomes a semi-virtualized console standard |
+
+| 2007+ | KVM supported by virtio-console |
+
+| 2020+ | Apple Virtualization Framework Adopts |
+
+#### 7.3.2 hvc vs ttyS comparison
+
+| Features | ttyS (traditional serial simulation) | hvc (virtual console) |
+
+|-------|:------------------:|:-------------:|
+
+| **Underlying protocol** | Simulation 16550 UART | virtio-console |
+
+| **Interrupt processing** | Need to simulate hardware interruption | Shared memory + event notification |
+
+| **Baud rate** | Need to simulate (such as 115200) | Unlimited |
+
+| **Transmission efficiency** | Low (byte-level interruption) | High (batch transmission) |
+
+| **CPU expense** | High | Low |
+
+| **Design Objectives** | Compatible with physical serial devices | Virtualization performance optimization |
+
+#### 7.3.3 Why Apple Virtualization Framework uses hvc0
+
+Apple Virtualization Framework uses `VZVirtioConsoleDeviceSerialPortConfiguration` to create a virtual serial port:
+
+````swift
+
+// Serial port configuration in LinuxVMManager
+
+Let consoleConfig = VZVirtioConsoleDeviceSerialPortConfiguration()
+
+consoleConfig.attachment = VZFileHandleSerialPortAttachment(
+
+fileHandleForReading: inputPipe.fileHandleForReading,
+
+fileHandleForWriting: outputPipe.fileHandleForWriting
+
+)
+
+config.serialPorts = [consoleConfig]
+
+```
+
+This is based on the **virtio-console** standard implementation, which is displayed as `/dev/hvc0` in the Linux client.
+
+> **💡 virtio-console advantages**
+
+>
+
+> - No need to simulate the timing and interruption of physical serial ports
+
+> - Data is transmitted through the shared memory loop buffer
+
+> - Support multi-channel (hvc0, hvc1, ...)
+
+> - Both host and client use modern API
+
+### 7.4 Console configuration in the kernel command line
+
+The kernel parameter `console=` specifies the output target of the kernel message and the initial login prompt:
+
+"Bash"
+
+# ===== Common configuration =====
+
+# Only use hvc0 (recommended for virtual machines)
+
+Console=hvc0 root=/dev/vda rw
+
+# Traditional serial port (physical server or QEMU simulation)
+
+console=ttyS0,115200
+
+# Only use the graphic console
+
+Console=tty0
+
+# Output to serial port and graphics console at the same time
+
+Console=tty0 console=ttyS0,115200
+
+```
+
+**Multi-console rules**:
+
+"Bash"
+
+# Multiple console= parameters can be specified
+
+Console=hvc0 console=tty0
+
+# Rules:
+
+#1. Kernel messages (printk) will be output to all specified consoles.
+
+Number two. The last console= becomes the "main console", which is used for:
+
+# - /dev/console's point
+
+# - stdin/stdout of init process
+
+# - Connection position of emergency mode shell
+
+```
+
+### Getty configuration in 7.5 Inittab
+
+**Getty** (get teletype) is a daemon that listens to the login on the terminal device.
+
+#### Getty Workflow
+
+```
+
+┌────────────────────────────────────────┐
+
+│ init process reading /etc/inittab │
+
+│↓│
+
+│ Find the respawn entry and start getty │
+
+│↓│
+
+│┌──────────────────────────────────────┐
+
+│ │ getty process │ │
+
+││1. Open the specified tty device │ │
+
+││2. Set terminal parameters (baud rate, terminal type) │ │
+
+││3. Display "login:" prompt │ │
+
+││4. Read the user name │ │
+
+│ │ 5. exec() execute /bin/login │ │
+
+│ └──────────────────────────────────────┘ │
+
+│↓│
+
+│ login verifies the password, and after success, exec() executes shell │
+
+│↓│
+
+│ After the user exits the shell, init restarts getty (respawn) │
+
+└────────────────────────────────────────┘
+
+```
+
+#### inittab configuration syntax
+
+"Bash"
+
+# Format: <id>:<runlevels>:<action>:<process>
+
+# hvc0 - virtio Virtual Console (Apple Virtualization Framework)
+
+Hvc0::respawn:/sbin/getty -L 115200 hvc0 vt100
+
+# tty1 - The first virtual terminal of the graphics console
+
+Tty1::respawn:/sbin/getty 38400 tty1
+
+# ttyS0 - Traditional serial port
+
+ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
+
+```
+
+#### getty parameter description
+
+| Parameters | Description |
+
+|-----|-----|
+
+| `-L` | Local line (Local), do not detect the modem control signal (DCD/DTR) |
+
+| `115200` | Baud rate (actually meaningless for hvc, but the parameters must exist) |
+
+| `hvc0` | Device name (corresponding to /dev/hvc0) |
+
+| `vt100` | Terminal type, used to correctly handle escape sequences and special keys |
+
+> **📝 Terminal Type (TERM)**
+
+>
+
+> The terminal type tells the program how to send control sequences (such as clear screen, moving cursor, color). Common types:
+
+> - `vt100`: Classic DEC terminal with the best compatibility
+
+> - `xterm`: X Window Terminal Simulator
+
+> - `linux`: Linux native console
+
+> - `dumb`: No special function
+
+### 7.6 Console configuration of Alpine Minirootfs
+
+Two consoles are configured in our `/etc/inittab`:
+
+"Bash"
+
+# Main console - virtio-console through Apple Virtualization Framework
+
+Hvc0::respawn:/sbin/getty -L 115200 hvc0 vt100
+
+# Backup console - if the graphics driver is loaded
+
+Tty1::respawn:/sbin/getty 38400 tty1
+
+```
+
+### 7.7 Why does the graphic console display a black screen?
+
+In the Alpine minirootfs environment, the graphics console (`VZVirtualMachineView`) displays a black screen is **expected behavior**:
+
+| Reason | Description |
+
+|-----|-----|
+
+| **Missing graphics card driver** | `virtio-gpu` driver is a module, not loaded |
+
+| **Missing frame buffer console** | `fbcon` (framebuffer console) module not loaded |
+
+| **Missing DRM subsystem** | `drm`, `drm_kms_helper` module not loaded |
+
+| **Design positioning** | minirootfs is for server/container use, no GUI required |
+
+#### How to enable graphic console text display
+
+If you need to display the text login interface (non-GUI, plain text) in the graphic window, you need to load the following modules:
+
+"Bash"
+
+# Add to the init script (in order of dependency)
+
+Insmod drm.ko
+
+Insmod drm_kms_helper.ko
+
+Insmod virtio-gpu.ko
+
+Insmod fbcon.ko
+
+```
+
+**However**, for server and development purposes, **serial console (hvc0) is completely sufficient**, and has the following advantages:
+
+- ✅ Easy to automate (can be read and written through the pipeline)
+
+- ✅ Support copying and pasting the complete log
+
+- ✅ You can scroll to view the historical output
+
+- ✅ Lower resource occupation
+
+### 7.8 Console Data Flow Architecture
+
+```
+
+┌────────────────────────────────────────────────────────┐
+
+│ macOS Host (LinuxVMManager) │
+
+├────────────────────────────────────────────────────┤
+
+││
+
+│ ┌──────────────────────────┐┌─────────────────────────────┐ │
+
+│ │ Serial Console UI (TextField) │ │ Graphic Console (VZVirtualMachineView)│ │
+
+││││││
+
+│ │ ┌──────────────────────┐ │ │ ┌─────────────────────────┐ │ │
+
+│ │ │ consoleOutput: String │ │ │ Rendering virtio-gpu frame buffering │ │ │
+
+│ │ └───────────┬─────────┘ │ │ └─────────┬───────────────┘ │ │
+
+││││││││
+
+│ └────────────┼────────────┘ └────────────┼──────────────────┘ │
+
+│ │ read() │ GPU command │
+
+││││
+
+│ ┌────────────┴────────────┐ ┌────────────┴──────────────────┐ │
+
+│ │ VZFileHandleSerialPort │ │ VZVirtioGraphicsDevice │ │
+
+│ │ Attachment │ │ Configuration │ │
+
+│ │ - outputPipe.fileHandle │ │ - VZVirtioGraphicsScanout │ │
+
+│ │ - inputPipe.fileHandle │ │ Configuration │ │
+
+│ └────────────┬──────────┘ └──────────┬──────────────────┘ │
+
+││││
+
+└───────────────┼────────────────────────┼────────────────────┘
+
+│ Virtio-console │ Virtio-gpu
+
+│ (Shared Memory + Event) │ (Shared Memory + Command Queue)
+
+▼▼
+
+┌────────────────────────────────────────────────────────┐
+
+│ Linux Client (Alpine) │
+
+├────────────────────────────────────────────────────┤
+
+││
+
+│ ┌──────────────────────────┐┌─────────────────────────────┐ │
+
+│ │ /dev/hvc0 │ │ /dev/tty1 │ │
+
+│ │ (virtio console) │ │ (graphic console) │ │
+
+││││││
+
+│ │ ┌──────────────────────┐ │ │ ┌─────────────────────────┐ │ │
+
+│ │ │ getty → login → sh │ │ │ │ (need fbcon + virtio-gpu) │ │ │
+
+│ │ └───────────────────┘ │ │ └───────────────────────┘ │ │
+
+││││││
+
+│ │ ✅ Working normally │ │ ⬛ Black screen (lack of driver) │ │
+
+│ └──────────────────────────┘ └───────────────────────┘ │
+
+││
+
+└──────────────────────────────────────────────────────┘
+
+```
+
+### 7.9 Console debugging skills
+
+#### Check the available console devices
+
+"Bash"
+
+# List all tty-related devices
+
+Ls -la /dev/hvc* /dev/tty* /dev/console 2>/dev/null
+
+# Sample output:
+
+# crw------- 1 root root 229, 0 Jan 1 00:00 /dev/hvc0
+
+# crw------- 1 root root 5, 1 Jan 1 00:00 /dev/console
+
+# crw------- 1 root root 4, 1 Jan 1 00:00 /dev/tty1
+
+```
+
+#### View the console of kernel identification
+
+"Bash"
+
+Cat/proc/consoles
+
+# Sample output:
+
+# hvc0 -W- (EC p a) 252:0
+
+#││
+
+# │ └── Function mark: E=enable C=preferred p=printk a=available
+
+# └── Reading and writing signs: - Unreadable, W can be written
+
+```
+
+#### Test console output
+
+"Bash"
+
+# Send a test message to the console
+
+Echo "Hello from Alpine!" >/dev/hvc0
+
+# View the kernel log (also output to the console)
+
+Dmesg|tail
+
+```
+
+#### Check the status of the getty process
+
+"Bash"
+
+Ps aux | grep getty
+
+# Sample output:
+
+# root 123 /sbin/getty -L 115200 hvc0 vt100
+
+```
+
+#### Troubleshooting of frequently asked questions
+
+| Symptoms | Possible Causes | Troubleshooting Commands |
+
+|-------|---------|---------|
+
+| No login prompt | getty not started | `ps aux \| grep getty` |
+
+| Input unresponsive | Console device error | `cat /proc/consoles` |
+
+| Scrambled code output | Terminal type mismatch | Check `$TERM` variable |
+
+| Black screen (graphic) | Missing fbcon module | `lsmod \| grep fb` |
+
+---
+
+## eight. List of relevant documents
+
+### 8.1 Project Script File
+
+```
+
+Linux VM Manager/
+
+├── download-alpine.sh # Alpine component download
+
+├── create-alpine-disk.sh # Disk image creation
+
+├── setup-alpine-rootfs.sh # Rootfs configuration
+
+├── create-alpine-initramfs.sh # Initramfs build
+
+└── Documentation/
+
+└── Alpine-Minirootfs-Setup-Guide.md
+
+```
+
+### 8.2 Runtime File Structure
+
+```
+
+~/LinuxVM/alpine/
+
+├── vmlinux # decompressed kernel (can be booted directly)
+
+├── vmlinuz-virt # original kernel (EFI stub format)
+
+├── initramfs-virt # official netboot initramfs
+
+├── initramfs-custom.gz # [Use] Custom initramfs
+
+├── alpine-minirootfs.raw # [Use] Disk mirroring
+
+├── minirootfs.tar.gz # original rootfs compressed package
+
+├── linux-virt-*.apk # kernel module package
+
+├── apk_extract/ # Decompressed APK content
+
+│ └── lib/modules/6.12.67-0-virt/
+
+└── initrd_extract/ # Official decompression initramfs
+
+```
+
+### 8.3 Customize the internal structure of Initramfs
+
+```
+
+Initramfs-custom/
+
+├── init # [Core] Start script
+
+├──bin/
+
+│ ├── busybox # Multifunctional tool set
+
+│ ├── kmod # Module Management
+
+│ ├── sh -> busybox # Shell
+
+│├── mount -> busybox
+
+│├── insmod -> busybox
+
+│ ├── switch_root -> busybox
+
+│ └── ... (Other symbolic links)
+
+├── lib/
+
+│ ├── ld-musl-aarch64.so.1 # [Key] Dynamic Linker
+
+│ └── modules/6.12.67-0-virt/
+
+│└── kernel/
+
+│├── drivers/
+
+│ │ ├── block/virtio_blk.ko
+
+│ │ └── net/virtio_net.ko
+
+│├──fs/
+
+││├──ext4/ext4.ko
+
+││├──jbd2/jbd2.ko
+
+│ │ └── mbcache.ko
+
+│ └── lib/crc16.ko
+
+├── dev/ # Device file mounting point
+
+├── proc/ # procfs mount point
+
+├── sys/ # sysfs mount point
+
+├── sysroot/ # root file system mount point
+
+└──tmp/
+
+```
+
+---
+
+## nine. Summary and best practices
+
+### 9.1 Configuration Core Points
+
+| Steps | Key Operations | Common Traps |
+
+|-------|---------|---------|
+
+| one. Kernel | Extract gzip kernel from EFI stub | Directly using vmlinuz-virt will fail |
+
+| two. Initramfs | Must contain musl dynamic linker | Lack will cause Error -2 |
+
+| three. Module | Load in order of dependency | ext4 requires crc16/mbcache/jbd2 |
+
+| four. Disk | Create with mke2fs -d | macOS cannot mount ext4 directly |
+
+| five. Inittab | Configure BusyBox init | Do not rely on OpenRC |
+
+| six Password | Clear the lock mark in shadow | Default root is locked |
+
+| Seven. Console | Use hvc0 as the main console | Graphics console requires additional modules |
+
+### 9.2 Debugging suggestions
+
+When encountering startup problems, troubleshoot in the following order:
+
+```
+
+1. Is the kernel loaded correctly?
+
+→ Is there any output? Check the vmlinux format
+
+2. Is the Init script executed?
+
+→ Error -2? Check the dynamic linker
+
+→ Error -8? Check #! Line
+
+3. Does the block device appear?
+
+→ Check whether the virtio_blk module is loaded
+
+4. Can the file system be mounted?
+
+→ Check the ext4 module and its dependencies
+
+→ Check root= parameters
+
+Five. Is Switch root successful?
+
+→ Check whether /sysroot/sbin/init exists
+
+6. Is the console available?
+
+→ Check the console= parameter
+
+→ Confirm that getty has been activated
+
+```
+
+### 9.3 Quick Command Reference
+
+"Bash"
+
+# ===== Kernel processing =====
+
+# Extract and decompress the kernel
+
+Python3 -c "d=open('vmlinuz-virt','rb').read();open('k.gz','wb').write(d[d.find(b'\x1f\x8b\x08'):])"
+
+Gunzip -c k.gz > vmlinux
+
+# ===== Disk mirroring =====
+
+# Create an ext4 mirror image with content
+
+/Opt/homebrew/opt/e2fsprogs/sbin/mke2fs -t ext4 -d rootfs_dir disk.raw 512M
+
+# ===== Initramfs =====
+
+# Decompression
+
+Gzip -dc initramfs.gz | cpio -idm
+
+# Packing
+
+Find . | cpio -ov --format=newc | gzip-9 > ../initramfs.gz
+
+# ===== Console debugging =====
+
+# Check the activity console
+
+Cat/proc/consoles
+
+# Test console output
+
+Echo "test" > /dev/hvc0
+
+# Check the getty process
+
+Ps aux | grep getty
+
+# ===== Debugging =====
+
+# Check ELF dynamic dependency
+
+Readelf -d busybox | grep NEEDED
+
+# List the commands supported by busybox
+
+./Busybox --list
+
+```
+
+---
+
+## Appendix: Quick Checklist of Key Concepts
+
+| Concept | Description |
+
+|-----|-----|
+
+| **Minirootfs** | Alpine minimum root file system, without kernel and bootloader |
+
+| **EFI stub** | Kernel format that can be directly executed by UEFI |
+
+| **virtio** | Virtualization I/O standards, including virtio-blk, virtio-net, virtio-console |
+
+| **hvc0** | Hypervisor Virtual Console, efficient virtual console |
+
+| **musl libc** | Lightweight C library used by Alpine |
+
+| **BusyBox** | A single executable file that integrates hundreds of Unix tools |
+
+| **initramfs** | Initial memory file system, used for early startup |
+
+| **switch_root** | Command to switch from initramfs to the real root file system |
+
+| **getty** | Listen to the login daemon on the terminal device |
+
+| **fbcon** | Framebuffer Console, the kernel module that displays text on graphic devices |
