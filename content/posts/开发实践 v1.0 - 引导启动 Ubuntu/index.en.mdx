@@ -1,0 +1,1015 @@
+# Development Practice v1.0 - Boot Ubuntu
+
+## Overview
+
+Based on the practical experience of the Apple Virtualization framework, this document covers the complete technical solutions for creating and managing Linux virtual machines on macOS. The content includes the comparison of the two mainstream boot methods, the use of core API, device configuration, troubleshooting of common problems and best practices.
+
+---
+
+##1. Overview of the framework
+
+Apple Virtualization Framework (`Virtualization.framework`) is a native virtualization API for macOS that supports running Linux virtual machines on Apple Silicon and Intel Mac.
+
+### 1.1 Core competencies
+
+| Ability | Description |
+
+| -------- | -------------------- |
+
+| CPU/memory configuration | Flexible allocation of virtual CPU cores and memory size |
+
+| Storage device | Support virtio block device, USB storage |
+
+| Network | NAT network, bridge network |
+
+| Graphic display | VirtIO GPU, support GUI desktop |
+
+| Input device | USB keyboard, mouse/trackpad |
+
+| Serial console | Command line interaction for non-GUI environment |
+
+### 1.2 Necessary permissions
+
+Add to the `Entitlements` file:
+
+```xml
+
+<key>com.apple.security.virtualization</key>
+
+<true/>
+
+```
+
+---
+
+## two Detailed explanation of the guidance method
+
+### 2.1 Method Comparison
+
+| Features | EFI Boot (VZEFIBootLoader) | Direct Kernel Boot (VZLinuxBootLoader) |
+
+|-------|------------------------|--------------------------------|
+
+| **Entrance** | UEFI Firmware → Boot Loader → Kernel | Directly Load Linux Kernel |
+
+| **Typical use** | Full distribution installation, desktop system | Cloud mirroring, development testing, CI/CD |
+
+| **ISO Installation** | ✅ Supported | ❌ Not Supported |
+
+| **Startup speed** | Slower (complete boot chain) | Fast |
+
+| **State persistence** | Requires EFI variable storage + MachineIdentifier | No need |
+
+| **User threshold** | Low (standard installation process) | High (need to provide kernel/initrd/cmdline) |
+
+### 2.2 EFI boot implementation
+
+Suitable for scenarios where you need to install the full Linux distribution from ISO.
+
+````swift
+
+// 1. Create a platform configuration
+
+Let platform = VZGenericPlatformConfiguration()
+
+platform.machineIdentifier = loadOrCreateMachineIdentifier()
+
+// two. Create an EFI boot loader
+
+Let bootLoader = VZEFIBootLoader()
+
+bootLoader.variableStore = loadOrCreateEFIVariableStore()
+
+// three. Apply to the configuration
+
+Config.platform=platform
+
+config.bootLoader = bootLoader
+
+// four. Mount ISO as USB storage (first installation)
+
+If let isoURL = installISOURL {
+
+Let isoAttachment = try VZDiskImageStorageDeviceAttachment(
+
+URL: isoURL,
+
+ReadOnly: true
+
+)
+
+Let usbStorage = VZUSBMassStorageDeviceConfiguration(attachment: isoAttachment)
+
+config.storageDevices.append(usbStorage)
+
+}
+
+```
+
+**Key persistent files:**
+
+- `MachineIdentifier.bin` - Machine identification to ensure the consistency of VM identity
+
+- `NVRAM.bin` - EFI variable storage, save boot configuration
+
+### 2.3 Direct kernel boot implementation
+
+It is suitable for cloud mirroring or development scenarios that require rapid iteration.
+
+````swift
+
+// 1. Create a Linux bootser
+
+Let bootLoader = VZLinuxBootLoader(kernelURL: kernelURL)
+
+// two. Configure initrd (optional)
+
+bootLoader.initialRamdiskURL = initrdURL
+
+// three. Set the kernel command line
+
+bootLoader.commandLine = "console=hvc0 root=/dev/vda1 rw"
+
+// four. Apply to the configuration
+
+config.bootLoader = bootLoader
+
+```
+
+**Common parameters of the kernel command line:**
+
+| Parameters | Description |
+
+|-----|-----|
+
+| `console=hvc0` | Output to virtio console |
+
+| `root=/dev/vda1` | Specify the root file system partition |
+
+| `rw` | Mound the root file system in read and write mode |
+
+| `cloud-init=disabled` | Disable cloud-init (avoid network waiting) |
+
+| `init=/bin/bash` | Enter single-user mode (for debugging) |
+
+---
+
+## three. Core API Reference
+
+### 3.1 Configuration class hierarchy
+
+```
+
+VZVirtualMachineConfiguration
+
+├── platform: VZPlatformConfiguration
+
+│└── VZGenericPlatformConfiguration
+
+├── bootLoader: VZBootLoader
+
+│├── VZEFIBootLoader
+
+│ └── VZLinuxBootLoader
+
+├── storageDevices: [VZStorageDeviceConfiguration]
+
+├── networkDevices: [VZNetworkDeviceConfiguration]
+
+├── graphicsDevices: [VZGraphicsDeviceConfiguration]
+
+├── keyboards: [VZKeyboardConfiguration]
+
+├──PointingDevices: [VZPointingDeviceConfiguration]
+
+└── serialPorts: [VZSerialPortConfiguration]
+
+```
+
+### 3.2 Life cycle of virtual machine
+
+````swift
+
+Class VMInstance: NSObject, VZVirtualMachineDelegate {
+
+Private var virtualMachine: VZVirtualMachine?
+
+Enum State {
+
+Case stopped, starting, running, paused, error(String)
+
+}
+
+// Start
+
+Func start() async throws {
+
+Let config = try createConfiguration()
+
+Try config.validate()
+
+virtualMachine = VZVirtualMachine(configuration: config)
+
+virtualMachine?.delegate = self
+
+Try await virtualMachine?.start()
+
+}
+
+// Suspend
+
+Func pause() async throws {
+
+Try await virtualMachine?.pause()
+
+}
+
+// Restore
+
+Func resume() async throws {
+
+Try await virtualMachine?.resume()
+
+}
+
+// Stop
+
+Func stop() async throws {
+
+Try await virtualMachine?.stop()
+
+}
+
+// Proxy method
+
+Func virtualMachine(_ vm: VZVirtualMachine,
+
+didStopWithError error: Error?) {
+
+// Deal with stop or error
+
+}
+
+Func guestDidStop(_ virtualMachine: VZVirtualMachine) {
+
+// The client actively shuts down
+
+}
+
+}
+
+```
+
+### 3.3 Display View Integration (SwiftUI)
+
+````swift
+
+Import SwiftUI
+
+Import Virtualization
+
+Struct VMDisplayView: NSViewRepresentable {
+
+Let virtualMachine: VZVirtualMachine
+
+Func makeNSView(context: Context) -> VZVirtualMachineView {
+
+Let view = VZVirtualMachineView()
+
+view.virtualMachine = virtualMachine
+
+view.capturesSystemKeys = true
+
+Return view
+
+}
+
+Func updateNSView(_ nsView: VZVirtualMachineView, context: Context) {
+
+nsView.virtualMachine = virtualMachine
+
+}
+
+}
+
+```
+
+---
+
+## four. Project architecture design
+
+### 4.1 Single VM Presentation Architecture (Apple Sample Style)
+
+```
+
+┌────────────────────────────────────┐
+
+│AppDelegate│
+
+│ ┌──────────────────────────────┐ │
+
+│ │ VZVirtualMachineConfiguration │ │
+
+││-EFI Boot + ISO Install││
+
+││-Graphics/Audio/Network/SPICE││
+
+│ └──────────────────────────────┘ │
+
+│││
+
+│▼│
+
+│ ┌──────────────────────────────┐ │
+
+│ │ VZVirtualMachine │ │
+
+│ └──────────────────────────────┘ │
+
+│││
+
+│▼│
+
+│ ┌──────────────────────────────┐ │
+
+│ │ VZVirtualMachineView (Main Window) │ │
+
+│ └──────────────────────────────┘ │
+
+└────────────────────────────────────┘
+
+Features:
+
+- When the application starts, create/start VM
+
+- Exit the process when VM stops
+
+- Suitable for demonstration and single use
+
+```
+
+### 4.2 Multi-VM management architecture
+
+```
+
+┌────────────────────────────────────────────┐
+
+│VMManager│
+
+│ ┌────────────────────────────────────────┐ │
+
+│ │ instances: [VMInstance] │ │
+
+│ │ - Multi-instance list management │ │
+
+│ │ - Configuration persistence (vms.json) │ │
+
+│ │ - CRUD operation │ │
+
+│ └────────────────────────────────────────────┘ │
+
+└──────────────────────────────────────────────┘
+
+│
+
+┌─────────────┼─────────────┐
+
+▼▼▼
+
+┌─────────────┐ ┌───────────┐ ┌─────────────┐
+
+│ VMInstance │ VMInstance │ VMInstance │ VMInstance │
+
+│ - State machine │ │ - State machine │ │ - State machine │
+
+│ - Life Cycle │ │ - Life Cycle │ │ - Life Cycle │
+
+└────────────┘ └───────────┘ └───────────┘
+
+│
+
+▼
+
+┌────────────────────────────────────┐
+
+│UI Layer│
+
+│ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
+
+│ │ VMList │ │ Detail │ Display/Console │ │
+
+│ │ View │ │ View │ │ Windows │ │
+
+│ └──────────┘ └────────┘ └────────────┘ │
+
+└────────────────────────────────────┘
+
+Features:
+
+- Support multi-VM simultaneous management
+
+- explicit state control (start/stop/pause/resume)
+
+- Independent display and console windows
+
+- Configure persistence to Application Support
+
+```
+
+### 4.3 Recommended directory structure
+
+```
+
+Linux VM Manager/
+
+├──Models/
+
+│ ├── VMConfiguration.swift # VM Configuration Model
+
+│ ├── VMInstance.swift # Single VM Instance Management
+
+│ └── VMManager.swift # Multi-VM Manager
+
+├── Views/
+
+│ ├── VMListView.swift # VM List
+
+│ ├── VMDetailView.swift # VM Details and Control
+
+│ ├── VMDisplayView.swift # Graphic Display Window
+
+│ └── ConsoleView.swift # Serial Console Window
+
+├── Utilities/
+
+│ ├── DiskImageHelper.swift # Disk Image Processing
+
+│ └── CloudInitHelper.swift # Cloud-init ISO Generation
+
+└── Resources/
+
+└── LinuxVMManager.entitlements
+
+```
+
+---
+
+## five. Equipment configuration list
+
+### 5.1 Storage device
+
+````swift
+
+// Main disk (virtio block device)
+
+Let diskAttachment = try VZDiskImageStorageDeviceAttachment(
+
+URL: diskURL,
+
+readOnly: false
+
+)
+
+Let disk = VZVirtioBlockDeviceConfiguration(attachment: diskAttachment)
+
+config.storageDevices=[disk]
+
+// USB storage (for ISO installation)
+
+Let usbAttachment = try VZDiskImageStorageDeviceAttachment(
+
+URL: isoURL,
+
+ReadOnly: true
+
+)
+
+Let usb = VZUSBMassStorageDeviceConfiguration(attachment: usbAttachment)
+
+config.storageDevices.append(usb)
+
+```
+
+### 5.2 Network equipment
+
+````swift
+
+// NAT network (the simplest, VM can access the external network)
+
+Let network = VZVirtioNetworkDeviceConfiguration()
+
+Network.attachment = VZNATNetworkDeviceAttachment()
+
+config.networkDevices=[network]
+
+```
+
+**NAT network features:**
+
+- VM can access the external network
+
+- External can't actively connect to VM
+
+- DHCP is provided by macOS
+
+### 5.3 Graphic device
+
+````swift
+
+Let graphics = VZVirtioGraphicsDeviceConfiguration()
+
+Graphics.scanouts=[
+
+VZVirtioGraphicsScanoutConfiguration(
+
+widthInPixels: 1280,
+
+HeightInPixels: 800
+
+)
+
+]
+
+config.graphicsDevices=[graphics]
+
+```
+
+### 5.4 Input device
+
+````swift
+
+// USB keyboard
+
+Config.keyboards = [VZUSBKeyboardConfiguration()]
+
+// USB screen coordinate pointer (recommended for GUI)
+
+config.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+
+```
+
+### 5.5 Serial port console
+
+````swift
+
+Let consolePort = VZVirtioConsoleDeviceSerialPortConfiguration()
+
+Let inputPipe=Pipe()
+
+Let outputPipe = Pipe()
+
+consolePort.attachment = VZFileHandleSerialPortAttachment(
+
+fileHandleForReading: inputPipe.fileHandleForReading,
+
+fileHandleForWriting: outputPipe.fileHandleForWriting
+
+)
+
+config.serialPorts = [consolePort]
+
+// Read the output
+
+outputPipe.fileHandleForReading.readabilityHandler = { handle in
+
+Let data = handle.availableData
+
+If let text = String(data: data, encoding: .utf8) {
+
+print(stripAnsiCodes(text))
+
+}
+
+}
+
+// Send input
+
+Func sendCommand(_ command: String) {
+
+If let data = (command + "\n").data(using: .utf8) {
+
+inputPipe.fileHandleForWriting.write(data)
+
+}
+
+}
+
+```
+
+### 5.6 Other optional devices
+
+````swift
+
+// Audio (input + output)
+
+Let audioInput = VZVirtioSoundDeviceConfiguration()
+
+audioInput.streams = [VZVirtioSoundDeviceInputStreamConfiguration()]
+
+Let audioOutput = VZVirtioSoundDeviceConfiguration()
+
+audioOutput.streams = [VZVirtioSoundDeviceOutputStreamConfiguration()]
+
+config.audioDevices = [audioInput, audioOutput]
+
+// Memory Balloon (Dynamic Memory Management)
+
+config.memoryBalloonDevices=[VZVirtioTraditionalMemoryBalloonDeviceConfiguration()]
+
+// Entropy device (provide random numbers)
+
+config.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+
+// SPICE Agent (clicpboard sharing, etc.)
+
+Let spiceAgent = VZVirtioConsoleDeviceConfiguration()
+
+Let spicePort = VZVirtioConsolePortConfiguration()
+
+spicePort.name = VZSpiceAgentPortAttachment.spiceAgentPortName
+
+spicePort.attachment = VZSpiceAgentPortAttachment()
+
+spiceAgent.ports = [spicePort]
+
+config.consoleDevices.append(spiceAgent)
+
+```
+
+---
+
+## six Frequently asked questions and solutions
+
+### 6.1 VM failed to start: Invalid kernel format
+
+**Reason:** The vmlinuz file is compressed by gzip and needs to be decompressed.
+
+**Solution:**
+
+"Bash"
+
+File vmlinuz
+
+# Output: vmlinuz: gzip compressed data...
+
+# Decompression
+
+Gzip -dc vmlinuz > vmlinux
+
+```
+
+### 6.2 VM boot failure: Invalid disk format
+
+**Reason:** The Virtualization framework only supports raw format disks and does not support QCOW2.
+
+**Solution:**
+
+"Bash"
+
+# Convert QCOW2 to raw
+
+Qemu-img convert -O raw ubuntu.qcow2 ubuntu.raw
+
+# Optional: Expand disk size
+
+Qemu-img resize -f raw ubuntu.raw 20G
+
+```
+
+### 6.3 Startup card in "Waiting for network"
+
+**Reason:** Cloud-init waits for the network configuration to time out.
+
+**Solution:** Add `cloud-init=disabled` to the kernel command line
+
+````swift
+
+bootLoader.commandLine = "console=hvc0 root=/dev/vda1 rw cloud-init=disabled"
+
+```
+
+### 6.4 File system read-only
+
+**Psisible reasons:**
+
+1. The kernel command line is missing the `rw` parameter
+
+2. Damage to the disk mirror file system (causing abnormal shutdown)
+
+3. Insufficient disk space
+
+**Solution:**
+
+Scheme A - Make sure that the command line contains `rw`:
+
+````swift
+
+bootLoader.commandLine = "console=hvc0 root=/dev/vda1 rw"
+
+```
+
+Plan B - Enter the single-user mode repair:
+
+````swift
+
+// Temporarily modify the command line
+
+bootLoader.commandLine = "console=hvc0 root=/dev/vda1 rw init=/bin/bash"
+
+```
+
+Execute after startup:
+
+"Bash"
+
+Mount -o remount,rw /
+
+# Perform the repair operation
+
+Sync
+
+```
+
+Scheme C - Re-download the clean mirror image:
+
+"Bash"
+
+Curl -L -o ubuntu.qcow2 "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-arm64.img"
+
+Qemu-img convert -O raw ubuntu.qcow2 ubuntu.raw
+
+Qemu-img resize -f raw ubuntu.raw 20G
+
+```
+
+### 6.5 Login failure (ubuntu/ubuntu does not work)
+
+**Reason:** Ubuntu Cloud Image disables password login by default and requires cloud-init configuration.
+
+**Solution A - Create Cloud-init seed.iso:**
+
+1. Create a `user-data` file:
+
+```yaml
+
+#Cloud-config
+
+Users:
+
+- name: ubuntu
+
+Sudo: ALL=(ALL) NOPASSWD:ALL
+
+Shell:/bin/bash
+
+Lock_passwd: false
+
+Plain_text_passwd: ubuntu
+
+```
+
+2. Create a `meta-data` file:
+
+```yaml
+
+Instance-id: linux-vm-001
+
+Local-hostname: linux-vm
+
+```
+
+3. Generate ISO:
+
+"Bash"
+
+Hdiutil makehybrid -o seed.iso -hfs -joliet -iso -default-volume-name cidata seed/
+
+```
+
+4. Mant seed.iso in the configuration
+
+**Solution B - Manual password setting in single-user mode:**
+
+"Bash"
+
+# After starting with init=/bin/bash
+
+Mount -o remount,rw /
+
+Passwd ubuntu
+
+# Enter the new password
+
+Sync
+
+# Restart and return to the normal command line
+
+```
+
+### 6.6 Console output garbled code (ANSI escape sequence)
+
+**Solution:** Add filter function
+
+````swift
+
+Func stripAnsiCodes(_ text: String) -> String {
+
+Let pattern = "\\x1B\\[[0-9;]*[A-Za-z]|\\x1B\\][^\\x07]*\\x07|\\x1B[()][AB012]"
+
+Guard let regex = try? NSRegularExpression(pattern: pattern) else {
+
+Return text
+
+}
+
+Let range = NSRange(text.startIndex..., in: text)
+
+Return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+
+}
+
+```
+
+### 6.7 The text in the display window is too small
+
+**Solution:** Adjust the resolution of the virtual display
+
+````swift
+
+// Use a lower resolution
+
+Graphics.scanouts=[
+
+VZVirtioGraphicsScanoutConfiguration(
+
+widthInPixels: 800,
+
+HeightInPixels: 600
+
+)
+
+]
+
+```
+
+---
+
+## seven. Best practices
+
+### 7.1 Choose the appropriate guidance method
+
+| Scene | Recommendation method |
+
+|-----|--------|
+
+| Install the full Linux desktop distribution | EFI boot + ISO |
+
+| Cloud Mirror Quick Start | Direct Kernel Boot |
+
+| CI/CD test environment | Direct kernel boot |
+
+| Long-term development environment | EFI guidance |
+
+### 7.2 Close VM correctly
+
+````swift
+
+// Give priority to normal shutdown (protect the file system)
+
+Func gracefulShutdown() async {
+
+// Send the shutdown command to VM
+
+sendCommand("sudo shutdown -h now")
+
+// Wait for VM to stop by itself
+
+// Or set to force stop after timeout
+
+}
+
+// Synchronize data before forced stop
+
+Func forceStop() async throws {
+
+SendCommand("sync")
+
+Try await Task.sleep(nanoseconds: 1_000_000_000) // Wait for 1 second
+
+Try await virtualMachine?.stop()
+
+}
+
+```
+
+### 7.3 Disk Image Management
+
+"Bash"
+
+# After creating the basic mirror image, use write-time replication to create an instance
+
+# macOS uses APFS clone
+
+Cp-c base.raw instance1.raw
+
+# Check the disk space regularly
+
+Df -h # Execute in VM
+
+```
+
+### 7.4 Configuration persistence
+
+````swift
+
+Struct VMConfiguration: Codable {
+
+Var id: UUID
+
+Var name: String
+
+Var cpuCount: Int
+
+Var memorySize: UInt64
+
+Var diskPath: String
+
+Var kernelPath: String?
+
+Var initrdPath: String?
+
+Var kernelCommandLine: String
+
+Var useEFIBoot: Bool
+
+}
+
+// Save to Application Support
+
+Func saveConfigurations(_ configs: [VMConfiguration]) throws {
+
+Let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+
+.appendingPathComponent("LinuxVMManager/vms.json")
+
+Let data = try JSONEncoder().encode(configs)
+
+Try data.write(to:url)
+
+}
+
+```
+
+---
+
+## eight. Appendix: Panorama of guidance
+
+### 8.1 Common boot methods in virtualized environments
+
+| Guidance method | Description | Typical scene |
+
+|--------|-----|--------|
+
+| **EFI/UEFI** | Modern Standard Firmware Boot | Desktop System, Server |
+
+| **Direct kernel boot** | Hypervisor directly loads the kernel | Cloud platform, lightweight VM |
+
+| **Legacy BIOS** | Traditional PC Compatible Mode | Old System Compatible |
+
+| **UEFI + Secure Boot** | Secure Boot with Signature Verification | Enterprise Environment |
+
+| **PXE/iPXE** | Network Boot | Data Center Batch Deployment |
+
+| **Boot from ISO** | Optical drive/USB media boot | System installation |
+
+### 8.2 Container Environment Guidance Instructions
+
+| Platform | Guidance method | Description |
+
+|-------|--------|--------|
+
+| **Docker (container)** | No boot | Process isolation that shares the host kernel |
+
+| **Docker Desktop (macOS/Windows)** | Direct Kernel Boot | LinuxKit Lightweight VM |
+
+| **WSL2 (Windows)** | Direct kernel boot | Microsoft customized Linux kernel |
+
+| **OrbStack (macOS)** | Direct kernel boot | Optimized lightweight Linux VM |
+
+**Key conclusion:** The container itself does not need to be booted; the Linux VM at the bottom of the container runtime usually uses direct kernel booting to optimize the startup speed.
+
+---
+
+## Reference resources
+
+- [Apple Virtualization Framework Documentation] (https://developer.apple.com/documentation/virtualization)
+
+- [Running GUI Linux in a Virtual Machine on a Mac (Apple Sample Code)] (https://developer.apple.com/documentation/virtualization/running_gui_linux_in_a_virtual_machine_on_a_mac)
+
+- [Ubuntu Cloud Images] (https://cloud-images.ubuntu.com/)
+
+- [Cloud-init Documentation] (https://cloudinit.readthedocs.io/)
+
+---
+
+*Document Version: 1.0 | Last Update: 2026-02-04*
