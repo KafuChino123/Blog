@@ -144,6 +144,8 @@
   color: var(--foreground);
   font-size: 1.0625rem;
   line-height: 1.8;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
 }
 
 .prose-blog > *:first-child {
@@ -196,10 +198,20 @@
   text-underline-offset: 3px;
   text-decoration-color: color-mix(in oklch, var(--accent) 40%, transparent);
   transition: text-decoration-color 0.15s;
+  overflow-wrap: break-word;
+  word-break: break-all;
 }
 
 .prose-blog a:hover {
   text-decoration-color: var(--accent);
+}
+
+/* Highlight (==text== from Obsidian) */
+.prose-blog mark {
+  background: color-mix(in oklch, var(--accent) 20%, transparent);
+  color: var(--foreground);
+  padding: 0.1em 0.2em;
+  border-radius: 0.2em;
 }
 
 /* Lists */

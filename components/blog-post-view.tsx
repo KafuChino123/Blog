@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import { highlight } from "sugar-high";
 import { Check, Copy, List, X } from "lucide-react";
@@ -36,7 +37,8 @@ function extractToc(markdown: string): TocItem[] {
       .toLowerCase()
       .replace(/\s+/g, "-")
       .replace(/[^\p{Letter}\p{Number}-]+/gu, "")
-      .replace(/-+/g, "-");
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
 
     items.push({ id, text, level: match[1].length });
   }
@@ -46,6 +48,29 @@ function extractToc(markdown: string): TocItem[] {
 
 function removeLeadingTitle(markdown: string): string {
   return markdown.replace(/^\s*#\s+.+\s*$/m, "").trimStart();
+}
+
+/**
+ * Preprocess markdown to handle Obsidian-specific syntax and CJK rendering issues.
+ */
+function preprocessMarkdown(markdown: string): string {
+  let result = markdown;
+
+  // Convert ==highlight== to <mark>highlight</mark>
+  result = result.replace(/==(.+?)==/g, "<mark>$1</mark>");
+
+  // Convert [[#anchor text]] internal links to plain text
+  result = result.replace(/\[\[#([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, anchor: string, label: string) => {
+    return label || anchor;
+  });
+
+  // Fix bold/italic with CJK punctuation:
+  // micromark breaks on **text！！** because ！ is Unicode punctuation.
+  // Convert **...** to <strong>...</strong> and *...* to <em>...</em> via HTML.
+  result = result.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  result = result.replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, "<em>$1</em>");
+
+  return result;
 }
 
 function extractTitleFromContent(markdown: string): string {
@@ -59,7 +84,8 @@ function slugify(text: string): string {
     .toLowerCase()
     .replace(/\s+/g, "-")
     .replace(/[^\p{Letter}\p{Number}-]+/gu, "")
-    .replace(/-+/g, "-");
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 async function copyText(text: string) {
@@ -163,7 +189,7 @@ export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
   const { language, t } = useLanguage();
   const activeContent = useMemo(() => {
     const raw = language === "en" && post.contentEn ? post.contentEn : post.content;
-    return removeLeadingTitle(raw);
+    return preprocessMarkdown(removeLeadingTitle(raw));
   }, [post.content, post.contentEn, language]);
   const content = activeContent;
   const toc = useMemo(() => extractToc(content), [content]);
@@ -228,6 +254,7 @@ export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
           <div className="prose-blog">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeRaw]}
               components={{
                 h2: headingRenderer(2),
                 h3: headingRenderer(3),
