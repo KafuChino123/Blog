@@ -1,0 +1,107 @@
+# 🆚  (NS) AttributedString
+
+AttributedString 和 NSAttributedString 都是用于富文本处理的类，但它们分别代表了 **Swift 的现代化设计哲学** 和 **Objective-C 的传统方式**。我们来对比讲解这两个类，并分析为什么新的 AttributedString 是一次重要升级。
+## **🧾 一、NSAttributedString（传统）**
+### **所属框架：**
+
+- Foundation（基于 Objective-C）
+### **设计风格：**
+
+- 基于键值对（Key-Value）
+- 使用 NSAttributedString.Key 进行属性设置
+### **示例用法（Objective-C 风格）：**
+
+```Objective-C
+let attributes: [NSAttributedString.Key: Any] = [
+    .font: UIFont.systemFont(ofSize: 16),
+    .foregroundColor: UIColor.red
+]
+let attrString = NSAttributedString(string: "Hello", attributes: attributes)
+```
+
+### **特点：**
+
+- 功能强大，支持字体、颜色、链接、段落样式等属性
+- 已经存在多年，生态丰富
+- 与 UIKit / AppKit 配合良好
+- 缺点是 API 不够 Swift 式，类型不安全，易出错
+
+---
+
+## **🧾 二、AttributedString（现代）**
+
+  
+
+### **所属框架：**
+
+- Foundation（从 iOS 15 / macOS 12 引入）
+- 完全 Swift 原生设计
+
+### **设计风格：**
+
+- 倾向于值语义（Value Semantics）
+- 属性是结构体中的字段，使用 Swift 类型系统保障安全
+- 和 SwiftUI 结合更紧密
+
+### **示例用法（Swift 风格）：**
+
+```Swift
+var attrString = AttributedString("Hello")
+attrString.foregroundColor = .red
+attrString.font = .system(size: 16)
+```
+
+你也可以对某段范围设置不同样式：
+
+```Swift
+var str = AttributedString("Hello, world!")
+if let range = str.range(of: "world") {
+    str[range].foregroundColor = .blue
+}
+```
+
+### **特点：**
+
+- 类型安全（属性有类型检查，避免低级错误）
+- 更易读、易写，贴近 Swift 风格
+- 更强的 Unicode 支持（比如 emoji、变长字符）
+- 可以与 Text 直接联动（SwiftUI 中的 Text 支持 AttributedString）
+---
+## **✅ 三、核心区别对比**
+
+|**特性**|**NSAttributedString**|**AttributedString**|
+|---|---|---|
+|设计语言|Objective-C|Swift|
+|类型安全|❌ 否|✅ 是|
+|值语义|❌ 否（类）|✅ 是（结构体）|
+|Unicode 支持|一般|优秀|
+|SwiftUI 兼容性|一般|非常好|
+|API 风格|键值对、繁琐|属性访问、直观|
+|自定义样式结构|❌ 无|✅ 支持定义属性类型（例如 URL、Date 等）|
+
+---
+
+## **🚀 四、SwiftUI 与 AttributedString 的结合**
+
+在 SwiftUI 中使用 AttributedString 非常简单，示例如下：
+
+```Swift
+Text(attrString)
+```
+
+这意味着你可以动态生成富文本而不再依赖 NSAttributedString + UIKit 的 UILabel 或 UITextView 了。你甚至可以使用 Markdown 初始化 AttributedString：
+
+```Swift
+let attrString = try! AttributedString(markdown: "**Hello**, *world*!")
+```
+---
+## **🎯 总结**
+
+| **为什么 AttributedString 是革命性的？** |
+| ------------------------------- |
+| ✅ 类型安全、值语义、更 Swift 风格           |
+| ✅ 与 SwiftUI 无缝集成                |
+| ✅ Unicode 支持优秀                  |
+| ✅ 支持 Markdown 解析                |
+| ✅ 更易组合、局部修改富文本                  |
+ AttributedString 不仅是 NSAttributedString 的替代者，而且是 Swift 生态中富文本处理的一次范式跃迁。
