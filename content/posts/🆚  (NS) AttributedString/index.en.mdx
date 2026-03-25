@@ -1,0 +1,157 @@
+# 🆚(NS)AttributedString
+
+AttributedString and NSAttributedString are both classes used for rich text processing, but they represent **Swift's modern design philosophy** and **Objective-C's traditional way** respectively. Let's compare and explain these two classes and analyze why the new AttributedString is an important upgrade.
+
+## **🧾 I. NSAttributedString (Traditional)**
+
+### **Belonging frame:**
+
+- Foundation (based on Objective-C)
+
+### **Design style:**
+
+- Based on key-value pairs (Key-Value)
+
+- Use NSAttributedString.Key for property settings
+
+### **Example usage (Objective-C style):**
+
+```Objective-C
+
+Let attributes: [NSAttributedString.Key: Any] = [
+
+.Font: UIFont.systemFont(ofSize:16),
+
+.foregroundColor: UIColor.red
+
+]
+
+Let attrString = NSAttributedString(string: "Hello", attributes: attributes)
+
+```
+
+### **Features:**
+
+- Powerful functions, supporting fonts, colors, links, paragraph styles and other attributes
+
+- It has existed for many years and is rich in ecology.
+
+- It works well with UIKit / AppKit
+
+- The disadvantage is that the API is not Swift-like enough, the type is not safe, and it is easy to make mistakes.
+
+---
+
+## **🧾 II. AttributedString (Modern)**
+
+### **Belonging frame:**
+
+- Foundation (introduced from iOS 15 / macOS 12)
+
+- Completely Swift native design
+
+### **Design style:**
+
+- Tend to value semantics (Value Semantics)
+
+- Attributes are fields in the structure, and the Swift type system is used to ensure security.
+
+- More closely combined with SwiftUI
+
+### **Example usage (Swift style):**
+
+"Swift
+
+Var attrString = AttributedString("Hello")
+
+attrstring.foregroundColor=.red
+
+Attrstring.font=.system(size:16)
+
+```
+
+You can also set different styles for a certain range:
+
+"Swift
+
+Var str = AttributedString("Hello, world!")
+
+If let range = str.range(of: "world") {
+
+str[range].foregroundColor=.blue
+
+}
+
+```
+
+### **Features:**
+
+- Type security (attributes have type checks to avoid low-level errors)
+
+- Easier to read and write, close to Swift style
+
+- Stronger Unicode support (such as emoji, variable-length characters)
+
+- Can be directly linked with Text (Text in SwiftUI supports AttributedString)
+
+---
+
+## **✅ III. Comparison of core differences**
+
+|**Characteristics**|**NSAttributedString**|**AttributedString**|
+
+|---|---|---|
+
+|Design Language|Objective-C|Swift|
+
+|Type Security|❌ No|✅ Yes|
+
+|Value semantics|❌ No (class)|✅ Yes (structure) |
+
+|Unicode Support|General|Excellent|
+
+|SwiftUI Compatibility|General|Very Good|
+
+|API style|key-value pair, cumbersome|attribute access, intuitive|
+
+|Custom style structure|❌ None|✅ Support defining attribute types (such as URL, Date, etc.)|
+
+---
+
+## **🚀 IV. Combination of SwiftUI and AttributedString**
+
+It is very simple to use AttributedString in SwiftUI. Examples are as follows:
+
+"Swift
+
+Text(attrstring)
+
+```
+
+This means that you can dynamically generate rich text without relying on NSAttributedString + UIKit's UILabel or UITextView. You can even use Markdown to initialize AttributedString:
+
+"Swift
+
+Let attrString = try! Attributedstring(markdown: "**Hello**, *world*!")
+
+```
+
+---
+
+## **🎯 Summary**
+
+| **Why is AttributedString revolutionary? **|
+
+| ----------------|
+
+| ✅ Type security, value semantics, more Swift style |
+
+| ✅ Seamless integration with SwiftUI |
+
+| ✅ Excellent Unicode support |
+
+| ✅ Support Markdown analysis |
+
+| ✅ Easier to combine and partially modify rich text |
+
+AttributedString is not only a substitute for NSAttributedString, but also a paradigm leap for rich text processing in the Swift ecosystem.
