@@ -1,0 +1,66 @@
+# Sparkle + GitHub Releases 集成指南
+
+## 一、一次性初始化配置
+
+**1. 生成密钥对**
+
+```bash
+./bin/generate_keys
+```
+
+- 公钥 → 填入 `Info.plist` 的 `SUPublicEDKey`
+- 私钥 → 自动保存在 macOS Keychain，妥善保管，切勿泄露
+
+**2. 配置 Info.plist**
+
+| Key             | Type   | Value                                                                 |
+| --------------- | ------ | --------------------------------------------------------------------- |
+| `SUFeedURL`     | String | `https://github.com/<用户名>/<仓库名>/releases/latest/download/appcast.xml` |
+| `SUPublicEDKey` | String | 上一步生成的公钥                                                              |
+
+---
+
+## 二、每次发版流程
+
+**第 1 步：打包应用**
+
+```bash
+ditto -c -k --sequesterRsrc --keepParent MyApp.app MyApp.zip
+```
+
+**第 2 步：生成并签名 appcast.xml**
+
+将 `MyApp.zip` 放入一个独立文件夹，然后运行：
+
+```bash
+./bin/generate_appcast /path/to/updates/folder
+```
+
+执行后该文件夹内会自动生成 `appcast.xml`。
+
+**第 3 步：修改 appcast.xml 中的下载地址**
+
+将 `<enclosure>` 中的 `url` 改为 GitHub Releases 的真实下载地址：
+
+```xml
+<enclosure
+  url="https://github.com/<用户名>/<仓库名>/releases/download/v2.0/MyApp.zip"
+  sparkle:edSignature="xxx..."
+  length="1623481"
+  type="application/octet-stream" />
+```
+
+**第 4 步：在 GitHub 创建新 Release**
+
+1. 进入仓库 → Releases → Draft a new release
+2. 创建 tag，例如 `v2.0`
+3. 上传附件：`MyApp.zip` + `appcast.xml`
+4. 发布 Release
+
+---
+
+## 三、注意事项
+
+- 每次发版**必须同时上传最新的 `appcast.xml`**，否则 Sparkle 无法检测到新版本
+- `SUFeedURL` 使用 `latest/download/` 路径，一次配置永久有效，无需每次修改
+- 私钥丢失将无法签名新版本更新，请务必备份
