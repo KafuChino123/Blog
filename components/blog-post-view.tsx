@@ -26,7 +26,7 @@ interface TocItem {
 }
 
 function extractToc(markdown: string): TocItem[] {
-  const headingRegex = /^(#{2,4})\s+(.+)$/gm;
+  const headingRegex = /^(#{2,5})\s+(.+)$/gm;
   const items: TocItem[] = [];
   let match: RegExpExecArray | null;
 
@@ -198,7 +198,7 @@ export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
   const mobileTocBottom = "calc(env(safe-area-inset-bottom, 0px) + 5rem)";
 
   const headingRenderer = (level: number) => {
-    const Heading = `h${level}` as "h2" | "h3" | "h4";
+    const Heading = `h${level}` as "h2" | "h3" | "h4" | "h5";
 
     return ({ children }: { children?: ReactNode }) => {
       const text = String(children).replace(/[`*_~\[\]]/g, "");
@@ -259,6 +259,7 @@ export function BlogPostView({ post, relatedPosts }: BlogPostViewProps) {
                 h2: headingRenderer(2),
                 h3: headingRenderer(3),
                 h4: headingRenderer(4),
+                h5: headingRenderer(5),
                 code({ children, className, ...props }) {
                   const value = String(children);
                   const isBlock = Boolean(className) || value.includes("\n");

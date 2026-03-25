@@ -155,7 +155,8 @@
 /* Headings */
 .prose-blog h2,
 .prose-blog h3,
-.prose-blog h4 {
+.prose-blog h4,
+.prose-blog h5 {
   scroll-margin-top: 6rem;
 }
 
@@ -181,6 +182,14 @@
   font-size: 1.1rem;
   font-weight: 600;
   margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--foreground);
+}
+
+.prose-blog h5 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
   margin-bottom: 0.5rem;
   color: var(--foreground);
 }
