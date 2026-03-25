@@ -1,0 +1,613 @@
+# 📱iOS related
+
+#### 1. iOS App Lifecycle
+
+##### Five states of the application
+
+1. **Not Running**: The program has not started, or the application is running but is stopped by the system halfway. When the device memory is tight, the current state of the suspended application will also be written to the memory, and then exit the application and release the memory. At this time, although we can see the icon on the taskbar, it has exited, which we call the application tombstone.
+
+2. **Inactive status Inactive**: The application is currently running in the foreground, but the focus is stolen by others. Typically, when the user locks the screen or leaves the application to respond to calls, messages and other events. Another common one is that it will be in this state for a short time when switching to different states. At this time, the App will stop running, but it will still occupy memory space to save the current state.
+
+3. **Activation Status Active**: The current application is running normally, the application focus is on the current application, and all events will be distributed to the current application. At this time, the application occupies memory and CPU time.
+
+4. **Background status Background**: The current application is still alive and can execute the code, but the default time in this situation is not long (up to ten minutes). When we press the Home button, it will enter the background state. If we do not continue to apply for the running time in the background, it will quickly enter the hanging state.
+
+Five. **Suspended status**: The application is in the background and has stopped executing the code. At this time, the application is still in memory and has not been completely recovered by the system. Only when the system issues a low-memory alarm will the system clear the memory of the suspended application to the application that is running in the foreground. At this time, it does not occupy CPU resources, but the memory is still occupied.
+
+#### 2. ViewController Life Cycle
+
+Core life cycle methods and call order of iOS view controller:
+
+````swift
+
+Class ViewController: UIViewController {
+
+// 1. Initialization (code or Storyboard)
+
+Override init(nibName: String?, bundle: Bundle?) {
+
+super.init(nibName: nibName, bundle: bundle)
+
+print("init(nibName:bundle:)")
+
+}
+
+Required init?( Coder: NSCoder){
+
+Super.init(coder: coder)
+
+Print("init(coder:)")
+
+}
+
+// two. View loading completed (in memory)
+
+Override func loadView() {
+
+Super.loadView()
+
+print("loadView()")
+
+}
+
+// three. The view has been loaded (recommended initialization operation)
+
+Override func viewDidLoad() {
+
+Super.viewDidLoad()
+
+print("viewDidLoad()")
+
+}
+
+// four. The view is about to be displayed.
+
+Override func viewWillAppear(_ animated: Bool) {
+
+super.viewWillAppear(animated)
+
+print("viewWillAppear(_:)")
+
+}
+
+// Five. View layout sub-view
+
+Override func viewWillLayoutSubviews() {
+
+Super.viewWillLayoutSubviews()
+
+print("viewWillLayoutSubviews()")
+
+}
+
+// six The view has been laid out to the sub-view
+
+Override func viewDidLayoutSubviews() {
+
+super.viewDidLayoutSubviews()
+
+print("viewDidLayoutSubviews()")
+
+}
+
+// seven. The view has been displayed
+
+Override func viewDidAppear(_ animated: Bool) {
+
+super.viewDidAppear(animated)
+
+print("viewDidAppear(_:)")
+
+}
+
+// eight. The view is about to disappear.
+
+Override func viewWillDisappear(_ animated: Bool) {
+
+super.viewWillDisappear(animated)
+
+print("viewWillDisappear(_:)")
+
+}
+
+// nine. The view has disappeared.
+
+Override func viewDidDisappear(_ animated: Bool) {
+
+super.viewDidDisappear(animated)
+
+print("viewDidDisappear(_:)")
+
+}
+
+//Ten. Memory warning
+
+Override func didReceiveMemoryWarning() {
+
+super.didReceiveMemoryWarning()
+
+print("didReceiveMemoryWarning()")
+
+}
+
+//11. View destruction
+
+Deinit {
+
+Print("deinit")
+
+}
+
+}
+
+```
+
+**Call order**:
+
+`init → loadView → viewDidLoad → viewWillAppear → viewWillLayoutSubviews → viewDidLayoutSubviews → viewDidAppear → viewWillDisappear → viewDidDisappear → deinit`
+
+#### 3. Persistence frameworks such as UserDefaults VS swiftData
+
+##### 3.1 Local Database (SwiftData / SQLite / GRDB)
+
+**Applicable scenarios**:
+
+• **A large amount of data**: such as lists, history records, user notes, etc.
+
+• **Relational data**: It is suitable for storing data that needs to be queried, sorted and associated (such as foreign keys).
+
+• **Efficiency query**: Support complex query, filtering, paging and other operations.
+
+• **Data persistence**: It is suitable for long-term storage of data. Even if the application exits or the device restarts, the data is still available.
+
+**Advantages**:
+
+• Structured storage, suitable for querying and managing a large amount of data.
+
+• More efficient reading and writing (compared with UserDefaults).
+
+• Suitable for offline data storage.
+
+**Disadvantages**:
+
+• Additional management is required, such as database migration, model definition, etc.
+
+• Compared with UserDefaults, the implementation is more complicated.
+
+#####3.2 UserDefaults
+
+**Applicable scenarios**:
+
+• Suitable for storing **lightweight preferences** or **user default configuration**, such as:
+
+• The theme mode selected by the user last time (dark/light)
+
+• Application language settings
+
+• Whether to turn on push notifications
+
+• The status of a recently used function (such as whether to turn on the power saving mode)
+
+**Inapplicable scenarios**:
+
+• **Unable to store a large amount of data**: UserDefaults is not designed to store big data, and the performance of accessing data is poor.
+
+• **Sensitive data cannot be stored**: The data is stored in plaintext format. Although it will not be synchronized by the cloud, there are still risks. Sensitive data should be stored in Keychain.
+
+• **Cannot be used for complex queries**: UserDefaults only supports simple key-value access and cannot be used for complex queries or filtering.
+
+**Advantages**:
+
+• Easy access, no database management required.
+
+• Suitable for small data access, suitable for the configuration items loaded when the App starts.
+
+**Disadvantages**:
+
+• Poor performance when reading big data (by default, the entire UserDefaults storage needs to be loaded into memory).
+
+• Query and relational data storage are not supported.
+
+**Why doesn't Apple recommend using UserDefaults to store general data? **
+
+1. **Performance problems**: UserDefaults will load all the stored data when the app starts. If too much data is stored, it will slow down the app startup.
+
+2. **Data synchronization problem**: UserDefaults is suitable for small data, while big data may affect the operation of synchronize(), resulting in data instability.
+
+3. **Not suitable for relational data**: UserDefaults does not provide query or data association functions. Storing complex data will lead to data structure chaos and maintenance difficulties.
+
+**Summary**
+
+|**Features**|**Local Database (SwiftData / GRDB)**|**UserDefaults**|
+
+|---|---|---|
+
+| Applicable scenarios | Structured, large amount of data | Small data, user preferences |
+
+|Data Structure| Relational Type, Table Structure|Key-Value|
+
+|Query ability|Support complex query|Only support simple reading|
+
+|Performance|High efficiency|Suitable for small data, poor performance when data is large|
+
+| Suitable for storage | User notes, messages, offline data | Theme, language, switch settings |
+
+|Do you recommend saving big data|✅ Yes|❌ No|
+
+If it is **temporary data** (such as whether the user has read the boot page) or **preferences**, use UserDefaults.
+
+If it is **user-generated data** (such as schedule, history, etc.), use local databases such as SwiftData, GRDB and SQLite.
+
+#### 4. If a global counter is implemented in a Swift project, what should be done to ensure less performance overhead?
+
+##### 4.1 Use `os_unfair_lock` (best performance)
+
+- os_unfair_lock is a lightweight, high-performance mutex lock introduced by Apple in iOS 10+ and macOS 10.12+ to replace the abandoned OSSpinLock. It is specially designed for efficient thread synchronization in critical sections, which is faster than NSLock or DispatchQueue synchronization, but requires manual management of the life cycle of the lock.
+
+- Implement single instance mode and lock encapsulation, using `os_unfair_lock`, which performs better than `DispatchQueue` and `NSLock`:
+
+"Swift
+
+Import os.lock
+
+Final class Counter {
+
+// Single instance, Swift ensures the initialization atomicity
+
+Static let shared = Counter()
+
+Private var count = 0
+
+Private var lock = os_unfair_lock()
+
+// Privatized constructors prevent external instantiation
+
+Private init() {}
+
+// Increase the count
+
+Func increment(){
+
+// 1. Lock: The current thread gets the lock, and other threads are blocked here.
+
+Os_unfair_lock_lock(&lock)
+
+// 2. defer registration unlock operation (delayed to the end of the function)
+
+//Https://onevcat.com/2018/11/defer/
+
+Defer {os_unfair_lock_unlock(&lock)}
+
+// three. Critical Zone: Safely Modify Shared Variables
+
+Count +=1
+
+// four. The function ends and automatically executes the unlock in defer.
+
+}
+
+// Get the current value
+
+Var current: Int {
+
+Os_unfair_lock_lock(&lock)
+
+Defer {os_unfair_lock_unlock(&lock)}
+
+Return count
+
+}
+
+}
+
+```
+
+- Call:
+
+"Swift
+
+// Increase the count
+
+Counter.shared.increment()
+
+// Get the current value
+
+Let count = Counter.shared.current
+
+```
+
+Use the performance optimization point of `os_unfair_lock`:
+
+- **Lock granularity minimization**: Lock only in the critical area (when operating `count`), and use `defer` to ensure unlocking;
+
+- **Avoid attribute wrapper overhead**: operate the lock directly instead of through the attribute wrapper to reduce indirect calls;
+
+- **Inline optimization**: `final class` prevents inheritance, and `increment` and `current` can be inlined by the compiler.
+
+###### 4.1.1 About the lock
+
+1. **The scope of the lock**:
+
+- The code between `os_unfair_lock_lock` and `os_unfair_lock_unlock` is ==Critical Section ==, == to ensure that only one thread is executed at the same time ==.
+
+- The critical area should be as short as possible to avoid time-consuming operations (such as network requests) to reduce lock competition.
+
+2. The meaning of **`defer`**
+
+- Even if there is an error in the critical area code (such as forced unpacking `nil`) or `return` in advance, `defer` will still ensure that the lock is released.
+
+- Prevent deadlock caused by forgetting to unlock manually (if there is no `defer`, the unlock code may be missed before `return`).
+
+3. **The performance advantages of the lock**:
+
+- `os_unfair_lock` is the underlying lock of iOS 10+, with performance close to lockless (atomic operation), which is more efficient than `NSLock` or `DispatchQueueue`.
+
+- Compared with `OSSpinLock' (abandoned), it solves the priority reversal problem, but needs to manually manage the life cycle of the lock.
+
+4. **Notes**:
+
+- **Lock initialization**: `os_unfair_lock` needs to be initialized as `os_unfair_lock()`, and instances of other locks cannot be reused.
+
+- **Non-recursive locking**: Repeated locking of the same thread will cause deadlock (different from `NSRecursiveLock`).
+
+- **The scope of the lock**: The lock variable (`lock`) should be an instance attribute, which is consistent with the life cycle of the protected shared variable (`count`).
+
+##### 4.2 Use `DispatchQueue` (serial queue synchronization)
+
+"Swift
+
+Final class Counter {
+
+Static let shared = Counter()
+
+Private var count = 0
+
+// Private serial queue
+
+Private let queue = DispatchQueue(label: "com.example.counter.queue")
+
+Private init() {}
+
+Func increment(){
+
+Queue.sync { // Synchronously submit to the queue
+
+Count +=1
+
+}
+
+}
+
+Var current: Int {
+
+Queue.sync { // Synchronize to get the value
+
+Return count
+
+}
+
+}
+
+}
+
+```
+
+**Features**:
+
+- **Advantages**: Automatic lock management, concise code, avoid manual locking/unlocking errors;
+
+- **Disadvantages**: `sync` operation will block the current thread, and frequent calls may cause performance overhead due to thread switching.
+
+##### 4.3 Use `NSLock` (Explicit Lock)
+
+"Swift
+
+Final class Counter {
+
+Static let shared = Counter()
+
+Private var count = 0
+
+Private let lock = NSLock() // explicit lock
+
+Private init() {}
+
+Func increment(){
+
+Lock.lock()
+
+Defer { lock.unlock() } // defer ensure unlocking
+
+Count +=1
+
+}
+
+Var current: Int {
+
+Lock.lock()
+
+Defer { lock.unlock()}
+
+Return count
+
+}
+
+}
+
+```
+
+**Features**:
+
+- **Advantages**: Cross-platform support (full version of macOS/iOS), clear code logic.
+
+- **Disadvantages**: The performance is slightly lower than that of `os_unfair_lock` (`NSLock` may use priority inversion protection).
+
+##### 4.4 Performance Comparison
+
+| Synchronization mechanism | Applicable scenarios | Advantages | Performance overhead (high to low) |
+
+| ---------------- | -------------- | --------- | ---------- |
+
+| `os_unfair_lock` | Critical area in pursuit of extreme performance | Extremely low overhead, precise control | Minimum (close to atomic operation) |
+
+| `NSLock` | Compatible with old systems or simple lock logic | Cross-platform support | Medium |
+
+| `DispatchQueue` | Need to cooperate with other operations of GCD | Automatic management, easy to use | High (thread switching overhead) |
+
+##### 4.5 Selection Suggestions
+
+1. **Priority `os_unfair_lock`**: If the target system is iOS 10+/macOS 10.12+ and there is no cross-platform demand.
+
+2. ** Second choice `NSLock`**: If you need to be compatible with the old system, or code readability is preferred.
+
+3. **Use `DispatchQueue`** with caution: Only in code that is heavily dependent on GCD, or needs to be used in conjunction with other queue tasks.
+
+##### 4.6 Expansion and Optimization: Reduce Lock Competition
+
+If the counter requires extremely high-frequency operation (such as one million times per second), it can be further optimized:
+
+"Swift
+
+// Use thread local storage + regular merge (similar to Java's LongAdder)
+
+Final class HighFrequencyCounter {
+
+Private var counts = [Thread: Int]()
+
+Private let lock = os_unfair_lock()
+
+Func increment(){
+
+Let thread = Thread.current
+
+Os_unfair_lock_lock(&lock)
+
+Defer {os_unfair_lock_unlock(&lock)}
+
+Counts[thread]=(counts[thread]?? Zero)+one
+
+}
+
+Var current: Int {
+
+Os_unfair_lock_lock(&lock)
+
+Defer {os_unfair_lock_unlock(&lock)}
+
+Return counts.values.reduce(0,+)
+
+}
+
+}
+
+```
+
+This scheme reduces global lock conflicts through distributed thread competition, but significantly increases the complexity of the code.
+
+---
+
+#### five. Foundation framework
+
+== Framework is a collection of many classes, methods, functions and documents organized according to a certain logic to make the R&D process easier. == There are more than 100 frameworks under the OS X system, which can be used to develop applications, process the Address Book structure of Mac, burn CDs, play DVDs, use QuickTime to play audio and video, etc.
+
+The foundation for all program development is the Foundation framework. The framework allows the use of some basic objects, such as numbers and strings, as well as some object collections, such as arrays, dictionaries and collections. Other functions include processing date and time, automation and memory management, processing basic file systems, storing (or archiving) objects, and processing aggregate data structures (such as dots and rectangles).
+
+The ApplicationKit framework contains a wide range of classes and methods, which are used to develop interactive graphic applications, making the process of developing text, menus, toolbars, tables, documents, clipboards and windows very easy. == In the OS X system, the term Cocoa generally refers to the Foundation framework, the ApplicationKit framework and the CoreData third-party framework. The term Cocoa Touch refers to Foundation, CoreData and UIKit frameworks. ==
+
+#### 6. Create a gradient font style for Label
+
+##### UIKit & Objective-C
+
+Take a paragraph of UILabel type text to realize the color gradient effect as an example:
+
+```Objective-C
+
+UILabel *titleLabel = [[UILabel alloc] init];
+
+titleLabel.text = @"Exclusive gift for newcomers";
+
+// Set the font to "FZZhengHeiS-EB-GB", with a size of 17 and a font weight of 400
+
+TitleLabel.font = [UIFont fontWithName:@"FZZhengHeiS-EB-GB" size:17];
+
+// Use normal colors first to avoid crashing
+
+TitleLabel.textColor = [UIColor orangeColor];
+
+// Add to the container view
+
+[containerView addSubview:titleLabel];
+
+// Set the title constraint
+
+[titleLabel mas_makeConstraints:^(MASConstraintMaker *make){
+
+make.top.equalTo(containerView.mas_top).offset(15);
+
+make.leading.equalTo(containerView.mas_leading).offset(15);
+
+};
+
+// Apply gradient color after the layout is completed - use dispatch_async to ensure that it is executed on the main thread and the layout is completed
+
+Dispatch_async(dispatch_get_main_queue(), ^{
+
+// Make sure that the label size has been calculated
+
+[TitleLabel sizeToFit];
+
+// Apply gradient only when the label has a reasonable size.
+
+If (! CGRectIsEmpty(titleLabel.bounds) && titleLabel.bounds.size.width > 0 &&
+
+TitleLabel.bounds.size.height > 0) {
+
+// Create a linear gradient color (from #FF7230 to #EA000B)
+
+CAGradientLayer *GradientLayer = [CAGradientLayer layer];
+
+gradientLayer.colors=@[
+
+(__Bridge id)[UIColor tct_colorWithHexString:@"#FF7230"]. CG Color,
+
+(__Bridge id)[UIColor tct_colorWithHexString:@"#EA000B"]. CG Color
+
+];
+
+gradientLayer.startPoint = CGPointMake(0, 0); // Gradient starting point
+
+gradientLayer.endPoint = CGPointMake(1, 0); // Gradient End Point
+
+gradientLayer.frame=titleLabel.bounds;
+
+// Create an image context of the right size
+
+UIGraphicsBeginImageContextWithOptions(titleLabel.bounds.size, NO, 0);
+
+[gradientLayer renderInContext:UIGraphicsGetCurrentContext()];
+
+UIImage *gradientImage = UIGraphicsGetImageFromCurrentImageContext();
+
+UIGraphicsEndImageContext(); // Make sure to close the context
+
+If (gradientImage) {
+
+TitleLabel.textColor=[UIColor colorWithPatternImage:gradientImage];
+
+}
+
+}
+
+});
+
+// Set the title constraint
+
+[titleLabel mas_makeConstraints:^(MASConstraintMaker *make){
+
+make.top.equalTo(containerView.mas_top).offset(15);
+
+make.leading.equalTo(containerView.mas_leading).offset(15);
+
+};
+
+```
