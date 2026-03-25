@@ -1,0 +1,74 @@
+# React 生命周期
+
+React 生命周期是指在一个组件从创建到销毁的过程中，React 会自动调用一系列方法。生命周期方法可以分为三个主要阶段：**挂载（Mounting）**、**更新（Updating）**、**卸载（Unmounting）**。
+
+### 1. 挂载阶段 (Mounting)
+
+组件被创建并插入到 DOM 中时，会依次调用以下生命周期方法：
+
+- **`constructor`**  
+    构造函数，初始化组件的状态和绑定方法。通常用来设置状态或绑定事件处理函数。
+    
+- **`static getDerivedStateFromProps`**  
+    在每次渲染前调用，接受当前的 `props` 和 `state`，并返回一个对象来更新 `state`。这是一个静态方法，没有 `this`。
+    
+    > 通常用于从 `props` 更新 `state`，但大多数情况下应该避免使用，因为它与 `shouldComponentUpdate` 有重叠功能。
+    
+- **`render`**  
+    必须实现的函数，返回组件的 UI，React 会根据 `render` 的返回值更新 DOM。
+    
+- **`componentDidMount`**  
+    组件被渲染到 DOM 后调用。适用于发送请求、添加事件监听器、启动计时器等副作用操作。
+    
+
+### 2. 更新阶段 (Updating)
+
+组件的 `props` 或 `state` 发生变化时，React 会重新渲染该组件。更新阶段的生命周期方法包括：
+
+- **`static getDerivedStateFromProps`**  
+    同挂载阶段，这个方法会在 `props` 或 `state` 变化时被调用。
+    
+- **`shouldComponentUpdate`**  
+    在组件的 `props` 或 `state` 发生变化时被调用，用于决定是否需要重新渲染组件。默认返回 `true`，返回 `false` 可以避免不必要的渲染。
+    
+    > 使用此方法可以优化性能，避免不必要的渲染。
+    
+- **`render`**  
+    和挂载阶段一样，`render` 方法会被调用来更新组件的 UI。
+    
+- **`getSnapshotBeforeUpdate`**  
+    在最新的渲染输出提交到 DOM 之前调用。它的返回值会作为第三个参数传递给 `componentDidUpdate`，通常用来获取 DOM 更新前的信息。
+    
+- **`componentDidUpdate`**  
+    在更新后的渲染结果被提交到 DOM 后调用。它接受前后的 `props` 和 `state`，适用于需要根据更新进行副作用操作（例如请求数据）的场景。
+    
+
+### 3. 卸载阶段 (Unmounting)
+
+组件被从 DOM 中移除时调用：
+
+- **`componentWillUnmount`**  
+    在组件从 DOM 中卸载前调用，适用于清理工作，例如清除定时器、取消网络请求、移除事件监听等。
+    
+
+### 4. 错误处理 (Error Boundaries)
+
+当子组件发生错误时，React 提供了错误边界来捕获错误并展示备用 UI：
+
+- **`static getDerivedStateFromError`**  
+    这个方法会在捕获到错误时调用，返回一个新的 `state`，用于更新 UI。
+    
+- **`componentDidCatch`**  
+    用于处理错误的详细信息，可以记录错误日志，或是显示备用 UI。
+    
+
+### React 16.3+ 的新生命周期方法
+
+React 16.3 引入了一些新的生命周期方法，并弃用了 `componentWillMount`、`componentWillReceiveProps` 和 `componentWillUpdate`，因为这些方法在异步渲染中会导致一些问题。新方法包括：
+
+- **`getDerivedStateFromProps`**  
+    取代 `componentWillReceiveProps`，使得 React 能够在每次渲染前检查 `props` 和 `state`，并决定是否更新 `state`。
+    
+- **`getSnapshotBeforeUpdate`**  
+    在 `componentDidUpdate` 前调用，允许组件在渲染后获取一些 DOM 信息，适用于滚动位置等场景。
+    
