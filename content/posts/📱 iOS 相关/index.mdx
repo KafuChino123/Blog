@@ -1,0 +1,427 @@
+# 📱 iOS 相关
+
+#### 1. iOS App生命周期
+
+##### 应用程序的五种状态
+
+ 1. **未运行状态 Not Running**：程序尚未启动，或者应用正在运行但是中途被系统停止，当设备内存紧张的时候，也会将挂起的应用当前状态写入到内存，然后退出应用并释放内存，这时候我们虽然能够在任务栏看到图标，但是它已经退出，我们称之为应用墓碑。
+	 
+ 2. **未激活状态 Inactive**：当前应用正在前台运行，但是焦点被其他抢去。比较典型的是用户锁屏或者离开应用去响应来电，信息等事件等时候。还有一种是比较常见的就是在不同状态切换的时候会短暂处于该状态,这时候App会停止运行，但是依然占用内存空间，用于保存当前状态。
+    
+3. **激活状态 Active**：当前应用正常运行，应用焦点在当前应用上，所有的事件都会被分发到当前应用，这时应用占用内存和CPU时间。
+    
+4. **后台状态 Background**：当前应用还是存活的，并且能够执行代码，但是默认处于这种情况的时间不长（最多十分钟），当我们按下Home键的时候会进入后台状态，如果不继续申请在后台运行的时间会快速进入挂起状态。
+    
+5. **挂起状态 Suspended**: 应用处在后台，并且已经停止执行代码。这时候应用还驻留在内存中，并没有被系统完全回收，只有在系统发出低内存告警的时候，系统才会把处于挂起状态的应用清除出内存给前台正在运行的应用。这时候不占用CPU资源，但是内存依然占用。 
+
+#### 2. ViewController 生命周期
+
+iOS 视图控制器的核心生命周期方法及调用顺序：  
+```swift
+class ViewController: UIViewController {
+    // 1. 初始化（代码或Storyboard）
+    override init(nibName: String?, bundle: Bundle?) {
+        super.init(nibName: nibName, bundle: bundle)
+        print("init(nibName:bundle:)")
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        print("init(coder:)")
+    }
+    
+    // 2. 视图加载完成（内存中）
+    override func loadView() {
+        super.loadView()
+        print("loadView()")
+    }
+    
+    // 3. 视图已加载（推荐初始化操作）
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        print("viewDidLoad()")
+    }
+    
+    // 4. 视图即将显示
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        print("viewWillAppear(_:)")
+    }
+    
+    // 5. 视图布局子视图
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        print("viewWillLayoutSubviews()")
+    }
+    
+    // 6. 视图已布局子视图
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        print("viewDidLayoutSubviews()")
+    }
+    
+    // 7. 视图已显示
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        print("viewDidAppear(_:)")
+    }
+    
+    // 8. 视图即将消失
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        print("viewWillDisappear(_:)")
+    }
+    
+    // 9. 视图已消失
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        print("viewDidDisappear(_:)")
+    }
+    
+    // 10. 内存警告
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        print("didReceiveMemoryWarning()")
+    }
+    
+    // 11. 视图销毁
+    deinit {
+        print("deinit")
+    }
+}
+```
+**调用顺序**：  
+`init → loadView → viewDidLoad → viewWillAppear → viewWillLayoutSubviews → viewDidLayoutSubviews → viewDidAppear → viewWillDisappear → viewDidDisappear → deinit`
+#### 3. UserDefaults VS swiftData等持久化框架
+
+##### 3.1 本地数据库 (SwiftData / SQLite / GRDB)
+
+**适用场景**：
+
+• **大量数据**：如列表、历史记录、用户笔记等。
+
+• **关系型数据**：适用于存储需要查询、排序、关联（如外键）的数据。
+
+• **高效查询**：支持复杂查询、筛选、分页等操作。
+
+• **数据持久化**：适合长期存储数据，即使应用退出或设备重启，数据仍然可用。  
+
+**优点**：
+
+• 结构化存储，适合查询和管理大量数据。
+
+• 更高效的读取和写入（相比 UserDefaults）。
+
+• 适用于离线数据存储。
+
+**缺点**：
+
+• 需要额外的管理，如数据库迁移、模型定义等。
+
+• 相较 UserDefaults，实现较复杂。
+
+##### 3.2 UserDefaults
+
+**适用场景**：
+
+• 适合存储**轻量级的偏好设置**或**用户默认配置**，如：
+
+• 用户上次选择的主题模式（深色/浅色）
+
+• 应用语言设置
+
+• 是否开启推送通知
+
+• 最近使用的某个功能的状态（如是否开启省电模式）
+
+**不适用场景**：
+
+• **不能存储大量数据**：UserDefaults 不是为存储大数据设计的，存取数据的性能较差。
+
+• **不能存储敏感数据**：数据存储在明文格式下，虽然不会被云同步，但仍然存在风险，敏感数据应存入 Keychain。
+
+• **不能用于复杂查询**：UserDefaults 仅支持简单的 key-value 存取，无法进行复杂的查询或筛选。
+
+**优点**：
+
+• 访问简单，无需数据库管理。
+
+• 适合小数据存取，适用于 App 启动时加载的配置项。
+
+**缺点**：
+
+• 读取大数据时性能较差（默认整个 UserDefaults 存储都要加载到内存）。
+
+• 不支持查询、关系型数据存储。
+
+**为什么苹果不推荐使用 UserDefaults 存储一般数据？**
+
+1. **性能问题**：UserDefaults 会在 App 启动时加载所有存储的数据，如果存储过多数据，会导致 App 启动变慢。
+
+2. **数据同步问题**：UserDefaults 适合小数据，而大数据可能会影响 synchronize() 操作，导致数据不稳定。
+
+3. **不适合关系型数据**：UserDefaults 不提供查询或数据关联功能，存储复杂数据会导致数据结构混乱，维护困难。
+
+**总结**
+
+|**特性**|**本地数据库 (SwiftData / GRDB)**|**UserDefaults**|
+|---|---|---|
+|适用场景|结构化、大量数据|小数据、用户偏好设置|
+|数据结构|关系型、表结构|Key-Value|
+|查询能力|支持复杂查询|仅支持简单读取|
+|性能|高效|适合小数据，数据多时性能差|
+|适合存储|用户笔记、消息、离线数据|主题、语言、开关设置|
+|是否推荐存大数据|✅ 是|❌ 否|
+
+如果是**临时数据**（如用户是否看过引导页）或者**偏好设置**，用 UserDefaults。
+
+如果是**用户生成的数据**（如日程、历史记录等），用 SwiftData、GRDB、SQLite 这样的本地数据库。
+
+#### 4. 如果在一个Swift项目中实现一个全局的计数器，应该怎么做保证性能开销较小？
+
+##### 4.1 使用`os_unfair_lock`（性能最优）
+- os_unfair_lock 是 Apple 在 iOS 10+ 和macOS 10.12+引入的一种轻量级、高性能的互斥锁（mutex lock），用于替代已被废弃的OSSpinLock。它专门设计用于短临界区（critical section）的高效线程同步，比 NSLock或DispatchQueue 同步更快，但需要手动管理锁的生命周期。
+- 实现单例模式，并进行锁封装，使用`os_unfair_lock`，性能优于`DispatchQueue`和`NSLock`:
+
+```Swift
+import os.lock
+
+final class Counter {
+    // 单例实例，Swift 保证初始化原子性
+    static let shared = Counter()
+    
+    private var count = 0
+    private var lock = os_unfair_lock()
+    
+    // 私有化构造器防止外部实例化
+    private init() {}
+    
+    // 增加计数
+    func increment() {
+	    // 1. 加锁：当前线程获得锁，其他线程在此处阻塞
+	    os_unfair_lock_lock(&lock)
+	    
+	    // 2. defer 注册解锁操作（延迟到函数结束时执行）
+	    // https://onevcat.com/2018/11/defer/
+	    defer { os_unfair_lock_unlock(&lock) }
+	    
+	    // 3. 临界区：安全修改共享变量
+	    count += 1
+	    
+	    // 4. 函数结束，自动执行 defer 中的解锁
+	}
+    
+    // 获取当前值
+    var current: Int {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return count
+    }
+}
+```
+
+- 调用：
+```Swift
+// 增加计数
+Counter.shared.increment()
+
+// 获取当前值
+let count = Counter.shared.current
+```
+
+使用`os_unfair_lock`的性能优化点：
+- **锁粒度最小化**：仅在临界区（操作 `count` 时）加锁，用 `defer` 确保解锁；
+- **避免属性包装器开销**：直接操作锁而非通过属性包装器，减少间接调用；
+- **内联优化**：`final class` 防止继承，`increment` 和 `current` 可被编译器内联。
+
+###### 4.1.1 关于锁
+1. **锁的作用域**：
+	
+    - `os_unfair_lock_lock` 和 `os_unfair_lock_unlock` 之间的代码是==临界区（Critical Section）==，==保证同一时间只有一个线程执行==。
+    - 临界区应尽量简短，避免耗时操作（如网络请求）以减小锁竞争。
+    
+2. **`defer` 的意义**
+	
+    - 即使临界区代码中发生错误（如强制解包 `nil`）或提前 `return`，`defer` 仍会保证锁被释放。
+    - 防止因忘记手动解锁导致的死锁（如没有 `defer` 时，可能在 `return` 前漏写解锁代码）。
+    
+3. **锁的性能优势**：
+	
+    - `os_unfair_lock` 是 iOS 10+ 的底层锁，性能接近无锁（原子操作），比 `NSLock` 或 `DispatchQueue` 更高效。
+    - 相较于 `OSSpinLock`（已废弃），它解决了优先级反转问题，但需手动管理锁的生命周期。
+    
+4. **注意事项**：
+	
+	- **锁的初始化**：`os_unfair_lock` 需初始化为 `os_unfair_lock()`，不可复用其他锁的实例。
+        
+	- **不可递归加锁**：同一线程重复加锁会导致死锁（与 `NSRecursiveLock` 不同）。
+        
+	- **锁的作用域**：锁变量（`lock`）应为实例属性，与保护的共享变量（`count`）生命周期一致。
+
+##### 4.2 使用 `DispatchQueue`（串行队列同步）
+
+```Swift
+final class Counter {
+    static let shared = Counter()
+    private var count = 0
+    // 私有串行队列
+    private let queue = DispatchQueue(label: "com.example.counter.queue") 
+    
+    private init() {}
+    
+    func increment() {
+        queue.sync { // 同步提交到队列
+            count += 1
+        }
+    }
+    
+    var current: Int {
+        queue.sync { // 同步获取值
+            return count
+        }
+    }
+}
+```
+
+**特点**：
+- **优点**：自动管理锁，代码简洁，避免手动加锁/解锁错误；
+- **缺点**：`sync` 操作会阻塞当前线程，频繁调用可能因线程切换产生性能开销。
+
+##### 4.3 使用 `NSLock`（显式锁）
+
+```Swift
+final class Counter {
+    static let shared = Counter()
+    private var count = 0
+    private let lock = NSLock() // 显式锁
+    
+    private init() {}
+    
+    func increment() {
+        lock.lock()
+        defer { lock.unlock() } // defer 确保解锁
+        count += 1
+    }
+    
+    var current: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+}
+```
+
+**特点**：
+- **优点**：跨平台支持（macOS/iOS 全版本），代码逻辑清晰。
+- **缺点**：性能略低于 `os_unfair_lock`（`NSLock` 内部可能使用优先级反转保护）。
+
+##### 4.4 性能对比
+
+| 同步机制             | 适用场景           | 优点        | 性能开销（高到低）  |
+| ---------------- | -------------- | --------- | ---------- |
+| `os_unfair_lock` | 追求极致性能的临界区     | 极低开销，精准控制 | 最低（接近原子操作） |
+| `NSLock`         | 兼容旧系统或简单锁逻辑    | 跨平台支持     | 中等         |
+| `DispatchQueue`  | 需要与 GCD 其他操作协同 | 自动管理，易用   | 较高（线程切换开销） |
+##### 4.5 选择建议
+
+1. **优先 `os_unfair_lock`**：若目标系统为 iOS 10+/macOS 10.12+，且无跨平台需求。
+2. **次选 `NSLock`**：若需要兼容旧系统，或代码可读性优先。
+3. **慎用 `DispatchQueue`**：仅在已重度依赖 GCD 的代码中，或需要与其他队列任务协同使用。
+##### 4.6 扩展优化：减少锁竞争
+
+若计数器需要极高频率操作（如每秒百万次），可进一步优化：
+
+```Swift
+// 使用线程本地存储 + 定期合并（类似 Java 的 LongAdder）
+final class HighFrequencyCounter {
+    private var counts = [Thread: Int]()
+    private let lock = os_unfair_lock()
+    
+    func increment() {
+        let thread = Thread.current
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        counts[thread] = (counts[thread] ?? 0) + 1
+    }
+    
+    var current: Int {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return counts.values.reduce(0, +)
+    }
+}
+
+```
+
+此方案通过分散线程竞争，减少全局锁冲突，但代码复杂度显著增加。
+
+---
+#### 5. Foundation 框架
+
+==框架是由许多类、方法、函数和文档按照一定的逻辑组织起来的集合，以使研发程序变得更容易。== 在 OS X 系统下有100多个框架，这些框架可以用来开发应用程序，处理 Mac 的 Address Book 结构、刻录CD、播放DVD、使用 QuickTime 播放音视频，等等。
+
+为所有程序开发奠定基础的框架是 Foundation 框架。该框架允许使用一些基本对象，如数字和字符串，以及一些对象集合，如数组、字典和集合。其他功能包括处理日期和时间、自动化和内存管理、处理基础文件系统、存储（或归档）对象、处理集合数据结构（如点和长方形）。
+
+ApplicationKit 框架包含广泛的类和方法，它们用来开发交互式图形应用程序，使得开发文本、菜单、工具栏、表、文档、剪贴板和窗口之类的过程变得十分简便。==在 OS X 系统中，术语 Cocoa 总的来说指的是 Foundation 框架、ApplicationKit 框架和 CoreData 第三方框架。术语 Cocoa Touch 是指 Foundation、CoreData 和 UIKit 框架。==
+
+#### 6. 为Label创建渐变字体样式
+##### UIKit & Objective-C
+以一段UILabel类型的文字，为其实现颜色渐变效果为例：
+```Objective-C
+UILabel *titleLabel = [[UILabel alloc] init];
+titleLabel.text = @"新人专享礼";
+
+// 设置字体为"FZZhengHeiS-EB-GB"，大小为17，字重400
+titleLabel.font = [UIFont fontWithName:@"FZZhengHeiS-EB-GB" size:17];
+
+// 先使用普通颜色，避免崩溃
+titleLabel.textColor = [UIColor orangeColor];
+
+// 添加到容器视图
+[containerView addSubview:titleLabel];
+
+// 设置标题约束
+[titleLabel mas_makeConstraints:^(MASConstraintMaker *make) {
+	make.top.equalTo(containerView.mas_top).offset(15);
+	make.leading.equalTo(containerView.mas_leading).offset(15);
+}];
+
+// 在布局完成后应用渐变色 - 使用dispatch_async确保在主线程上执行且布局已完成
+dispatch_async(dispatch_get_main_queue(), ^{
+// 确保标签尺寸已计算
+	[titleLabel sizeToFit];
+	// 只有当标签有合理尺寸时才应用渐变
+	if (!CGRectIsEmpty(titleLabel.bounds) && titleLabel.bounds.size.width > 0 &&
+	titleLabel.bounds.size.height > 0) {
+	// 创建线性渐变颜色（从 #FF7230 到 #EA000B）
+	
+		CAGradientLayer *gradientLayer = [CAGradientLayer layer];
+		gradientLayer.colors = @[
+			(__bridge id)[UIColor tct_colorWithHexString:@"#FF7230"].CGColor,
+			(__bridge id)[UIColor tct_colorWithHexString:@"#EA000B"].CGColor
+		];
+		gradientLayer.startPoint = CGPointMake(0, 0); // 渐变起点
+		gradientLayer.endPoint = CGPointMake(1, 0);   // 渐变终点
+		gradientLayer.frame = titleLabel.bounds;
+		
+		// 创建正确大小的图像上下文
+		UIGraphicsBeginImageContextWithOptions(titleLabel.bounds.size, NO, 0);
+		[gradientLayer renderInContext:UIGraphicsGetCurrentContext()];
+		
+		UIImage *gradientImage = UIGraphicsGetImageFromCurrentImageContext();
+		UIGraphicsEndImageContext(); // 确保关闭上下文
+		if (gradientImage) {
+			titleLabel.textColor = [UIColor colorWithPatternImage:gradientImage];
+		}
+	}
+});
+
+    // 设置标题约束
+
+    [titleLabel mas_makeConstraints:^(MASConstraintMaker *make) {
+
+        make.top.equalTo(containerView.mas_top).offset(15);
+
+        make.leading.equalTo(containerView.mas_leading).offset(15);
+
+    }];
+```
