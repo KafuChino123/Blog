@@ -1,0 +1,1115 @@
+# SwiftUI + NSOutlineView Implementation Class Finder File Tab
+
+> **Technology Stack**: SwiftUI / AppKit (NSViewRepresentable)/ macOS
+
+> **Keywords**: NSOutlineView · File Tree · Lazy Loading · Multi-list Grid · Bridge
+
+> **Background**: Implement local rootfs file browsing for Files Tab in the container management desktop application
+
+##1. Overview and Objectives
+
+This document describes how to bridge `NSOutlineView` through `NSViewRepresentable` in the macOS SwiftUI application to realize a **Class Finder's File Tab** - supporting multi-column tree structure, lazy directory loading, and native desktop-level interaction.
+
+The actual application scenario is the details page Files Tab of the container management tool: the local mount directory corresponding to the container is presented in Finder style, which supports browsing, opening, positioning and other operations.
+
+### Core goals
+
+| # | Target | Acceptance Standards |
+
+|---|-----|---------|
+
+| 1 | Automatically parse container rootfs local path | Multi-source inference chain, available in the mainstream environment |
+
+| 2 | Finder-level multi-row tree view | Name / Date Modified / Size / Kind four columns |
+
+| 3 | SwiftUI + AppKit Stable Bridge | No Crash, No Memory Leakage |
+
+| 4 | Smooth large directory scene | Lazy loading + background reading, no blocking of the main thread |
+
+| 5 | Abnormal status can be restored | Sub-type error prompt + refresh entrance |
+
+---
+
+## two Why don't you use pure SwiftUI?
+
+The `List` / `OutlineGroup` of SwiftUI on macOS has the following limitations:
+
+| Ability | SwiftUI OutlineGroup | NSOutlineView |
+
+| ----------- | ------------------------ | ----------------------------------------- |
+
+| Multi-column support | ❌ HStack simulation is required, column header/column width needs to be handwritten | ✅ Native multi-column, column header sorting, drag and drop width adjustment can be used out of the box |
+
+| Right-click to select first and then pop up the menu | ❌ `.contextMenu` does not change the selected state | ✅ Can be selected in `rightMouseDown` first `selectRowIndexes` |
+
+| Double-click to distinguish to expand/open | ❌ Need to judge by yourself | ✅ `doubleAction` + `clickedRow` native support |
+
+| Big data diff performance | ⚠️ When the data source changes, the whole tree diff | ✅ delegate/datasource loads on demand |
+
+| Drag and drop | ⚠️ API limited | ✅ Native drag & drop protocol |
+
+`NSOutlineView` is a member of the control family used by macOS Finder itself, and its support for "multi-row + tree structure + desktop-level interaction" is much more mature than SwiftUI. Therefore, the hybrid architecture of **SwiftUI shell + `NSViewRepresentable` bridge `NSOutlineView`** is adopted.
+
+---
+
+## three. Overall structure
+
+```
+
+┌──────────────────────────────────────────────┐
+
+│ ContainerFilesTab│
+
+│ (SwiftUI View — Status arrangement layer) │
+
+│ ┌────────────┐ ┌──────────┐ ┌─────────────────┐ │
+
+│ │ Toolbar │ │ Error │ │ Loading / Empty │ │
+
+│ │(Refresh/Hide) │ │ State │ │ State │ │
+
+│ └─────┬──────┘ └────┬─────┘ └────────┬──────────┘ │
+
+│││││
+
+│ ▼ ▼ ▼ │
+
+│ ┌────────────────────────────────────────┐ │
+
+│ │ LocalRootFSOutlineView ││
+
+│ │ (NSViewRepresentable — Rendering Layer) │ │
+
+│ │ ┌────────────────────────────────────┐ │ │
+
+│ │ │ NSOutlineView (AppKit) │ │ │
+
+│ │ │ ┌──────┬────────┬─────┬───────┐ │ │ │
+
+│ │ │ Name │ Date Mod │ Size │ Kind │ │ │ │
+
+│ │ │ ├──────┴────────┴─────┴─────────┤ │ │ │
+
+│ │ │ │ 📁 etc/ │ │ │
+
+│ │ │ │ 📁 var/ │ │ │
+
+│ │ │ │ 📄 .dockerenv │ │ │ │
+
+│ │ │ └──────────────────────────────┘ │ │ │
+
+│ │ └─────────────────────────────────┘ │ │
+
+│ └──────────────────────────────────────────┘ │
+
+└────────────────────────┬─────────────────────┘
+
+│
+
+▼
+
+┌──────────────────┐
+
+│LocalRootFSService│
+
+│ (File System Service Layer) │
+
+│ · Path verification │
+
+│ · Catalog │
+
+│ · Sort & Filter │
+
+└──────────────────┘
+
+```
+
+### Data flow
+
+```
+
+User operation (expand directory / refresh / switch hidden files / switch containers)
+
+│
+
+▼
+
+ContainerFilesTab (SwiftUI @State Driver)
+
+│
+
+├─ Path change → resolveRootURL() → Check → Set rootURL
+
+│
+
+▼
+
+LocalRootFSOutlineView (NSViewRepresentable)
+
+│
+
+├─ Expand node → outlineViewItemWillExpand
+
+││
+
+│▼
+
+│ listDirectory() (background queue)
+
+││
+
+│ ▼ (generation verification)
+
+│ Main thread backfills children → reloadItem()
+
+│
+
+├─ Double-click → Table of Contents: Expand/Fold; File: NSWorkspace.shared.open()
+
+├─ Right-click → Context Menu (Open / Reveal in Finder / Copy Path)
+
+│
+
+▼
+
+UI update
+
+```
+
+---
+
+## four. Detailed explanation of the core module
+
+### 4.1 ContainerFilesTab — SwiftUI Status Extitation Layer
+
+**Responsibilities**: Manage all top-level statuses and user interaction entrances of Files Tab. It does not come into contact with any AppKit API itself.
+
+#### Status definition
+
+````swift
+
+Struct ContainerFilesTab: View {
+
+@State private var isLoading = false
+
+@State private var errorMessage: String?
+
+@State private var showHiddenFiles: Bool = Self.finderDefaultShowHidden
+
+@State private var selectedItems: Set<URL>=[]
+
+@State private var rootURL: URL?
+
+}
+
+```
+
+#### Hide the default value of the file
+
+The initial value is read from the system Finder preferences:
+
+````swift
+
+Private static var finderDefaultShowHidden: Bool {
+
+UserDefaults(suiteName: "com.apple.finder")?
+
+.bool(forKey: "AppleShowAllFiles")?? False
+
+}
+
+```
+
+> **Supplementary Notes**: The preferences of each macOS application are stored in the plist file under `~/Library/Preferences/`. It can be read across applications through `UserDefaults(suiteName:)`. Read the `AppleShowAllFiles` key value of Finder here to keep the initial behavior of Files Tab consistent with the user's system settings. If the user has never set it (the key does not exist), the default is `false` - the same as the factory behavior of macOS.
+
+#### Toolbar
+
+| Button | Behavior |
+
+|-----|-----|
+
+| 🔄 Refresh | Re-resolve the path + reload the file tree |
+
+| 👁 Show/hide files | Switch `showHiddenFiles` to trigger OutlineView reload |
+
+#### View Structure (Simplified)
+
+````swift
+
+Var body: some View {
+
+VStack(spacing: 0) {
+
+Toolbar
+
+If isLoading {
+
+ProgressView("Loading...")
+
+} else if let error = errorMessage {
+
+ErrorStateView(message: error, onRetry: reload)
+
+} else if let url = rootURL {
+
+LocalRootFSOutlineView(
+
+rootURL:url,
+
+showHiddenFiles: showHiddenFiles,
+
+selectedItems: $selectedItems
+
+)
+
+} other {
+
+EmptyStateView(message: "No root path configured for this container.")
+
+}
+
+}
+
+.onAppear { resolveAndLoad()}
+
+}
+
+```
+
+### 4.2 LocalRootFSOutlineView — NSViewRepresentable Bridging Layer
+
+**Responsibilities**: Embed `NSOutlineView` in SwiftUI through `NSViewRepresentable` to handle all rendering and interaction of the file tree.
+
+#### NSViewRepresentable Life Cycle
+
+`NSViewRepresentable` is a protocol provided by SwiftUI to embed AppKit views into the SwiftUI view hierarchy:
+
+```
+
+makeCoordinator() → Create Coordinator (reference type) and act as delegate/datasource
+
+makeNSView(context:) → Create and configure NSScrollView + NSOutlineView (call only once)
+
+updateNSView(_:context:) → Called when SwiftUI status changes, synchronize the new state to AppKit
+
+dismantleNSView(_:coordinator:) → Call when the view is destroyed (optional cleaning)
+
+```
+
+Among them, `Coordinator` is the core role - it is a `class` instance, holding `NSOutlineView` reference, and implementing `NSOutlineViewDataSource` + `NSOutlineViewDelegate`. Because the SwiftUI view itself is struct (every body recalculation will be rebuilt), all variable states that need to be maintained across life cycles should be placed in Coordinator.
+
+#### File node data model
+
+````swift
+
+Class FileNode {
+
+Let url: URL
+
+Let name: String
+
+Let is Directory: Bool
+
+Let fileSize: Int64?
+
+Let modificationDate: Date?
+
+Let kind: String // Localization type description, such as "JPEG Image"
+
+Let isHidden: Bool
+
+Var children: [FileNode]? // nil = not loaded, [] = empty directory
+
+Var isLoading = false // The subnode is loading in the background
+
+}
+
+```
+
+> **Why class instead of struct? **
+
+> The DataSource method of `NSOutlineView` (`outlineView(_:child:ofItem:)`) identifies the node through **object reference**. A `item → row` mapping table is maintained internally, relying on reference stability (`===`). If struct (value type) is used, a copy is generated every time you access, `NSOutlineView` cannot correctly track the expanded/selected status, which will cause the arrow state to be lost or crashed.
+
+> **`children: nil` vs `children: []` semantic distinction**
+
+> This is the basis of lazy loading. `nil` means "not loaded, there may be content" → display the expansion arrow; `[]` means "loaded but empty" → does not display the arrow. `isItemExpandable` of `NSOutlineView` returns `true` when and only when `isDirectory && (children == nil || ! Children!.is Empty)`.
+
+#### Four-column configuration
+
+| Column Logo | Title | Initial Width Ratio | Content |
+
+|--------|-----|------------|--------|
+
+| `name` | Name | 45% | File system icon + file name |
+
+| `dateModified` | Date Modified | 25% | `yyyy-MM-dd HH:mm` |
+
+| `size` | Size | 15% | Human readable size (catalog shows `--`) |
+
+| `kind` | Kind | 15% | Localized file type (via `localizedTypeDescriptionKey`) |
+
+````swift
+
+Func makeNSView(context: Context) -> NSScrollView {
+
+Let outlineView = NSOutlineView()
+
+outlineView.headerView=NSTableHeaderView()
+
+Let columns: [(id: String, title: String, ratio: CGFloat)] = [
+
+("Name", "Name", 0.45),
+
+("dateModified", "Date Modified", 0.25),
+
+("Size", "Size", 0.15),
+
+("Kind", "Kind", 0.15),
+
+]
+
+For col in columns {
+
+Let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(col.id))
+
+Column.title=col.title
+
+column.minWidth=60
+
+outlineView.addTableColumn(column)
+
+}
+
+outlineView.outlineTableColumn = outlineView.tableColumns.first // Name column with expansion arrow
+
+outlineView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
+
+outlineView.target=context.coordinator
+
+outlineView.delegate=context.coordinator
+
+outlineView.dataSource = context.coordinator
+
+Let scrollView = NSScrollView()
+
+scrollView.documentView = outlineView
+
+scrollView.hasVerticalScroller = true
+
+Return scroll view
+
+}
+
+```
+
+#### Lazy loading process
+
+```
+
+Users click the expansion arrow
+
+│
+
+▼
+
+outlineView(_:isItemExpandable:) → return node.isDirectory
+
+│
+
+▼
+
+outlineViewItemWillExpand(_:) — Implemented in Coordinator
+
+│
+
+├─ node.children == nil ?
+
+││
+
+│ ├─ YES → node.isLoading = true
+
+│││
+
+││▼
+
+│ │ DispatchQueue.global(qos: .userInitiated).async {
+
+││ let items = service.listDirectory(at: node.url, ...)
+
+││ DispatchQueue.main.async{
+
+│ │ guard self.generation == capturedGen else { return }
+
+│ │ node.children = items
+
+││node.isLoading=false
+
+│ │ outlineView.reloadItem(node, reloadChildren: true)
+
+││}
+
+││}
+
+││
+
+│ └─ NO → children already have a value, expand directly
+
+│
+
+▼
+
+outlineView(_:numberOfChildrenOfItem:) → return node.children?.count ?? 0
+
+outlineView(_:child:ofItem:) → return node.children![ Index]
+
+```
+
+#### Interactive realization
+
+**Double-click to open**:
+
+````swift
+
+@Objc func handleDoubleClick(_ sender: NSOutlineView) {
+
+Let row = sender.clickedrow
+
+Guard row >= 0, let node = sender.item(atRow: row) as? FileNode else {return}
+
+If node.isDirectory {
+
+If sender.isItemExpanded(node) {
+
+sender.collapseItem(node)
+
+} other {
+
+sender.expandItem(node)
+
+}
+
+} other {
+
+NSWorkspace.shared.open(node.url)
+
+}
+
+}
+
+```
+
+**Right-click menu (select first and then pop up)**:
+
+The standard behavior of Finder is: when right-clicking on an unchecked row, set the row to the selected state first, and then pop up the context menu. Many third-party file managers ignore this detail, resulting in the operation object of the right-click menu inconsistent with the visual selection status. The implementation method is to process it in the custom `NSOutlineView` subclass or Coordinator:
+
+````swift
+
+Override func menu(for event: NSEvent) -> NSMenu? {
+
+Let point = convert(event.locationInWindow, from: nil)
+
+Let row = row(at: point)
+
+If row >= 0 &&! Selected RowIndexes.contains(row) {
+
+selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+
+}
+
+Guard row >= 0, let node = item(atRow: row) as? FileNode else { return nil }
+
+Let menu = NSMenu()
+
+menu.addItem(withTitle: "Open", action: #selector(openItem(_:)), keyEquivalent: "")
+
+menu.addItem(withTitle: "Reveal in Finder", action: #selector(revealInFinder(_:)), keyEquivalent: "")
+
+menu.addItem(NSMenuItem.separator())
+
+menu.addItem(withTitle: "Copy Path", action: #selector(copyPath(_:)), keyEquivalent: "")
+
+Return menu
+
+}
+
+```
+
+#### Column width management: automatic allocation vs user manual adjustment
+
+Column width management needs to solve a contradiction: the column width should be automatically allocated proportionally when the window is scaled, but the user does not want to be overwritten after manual dragging and adjusting.
+
+````swift
+
+Class Coordinator: NSObject {
+
+Var isApplyingAutoColumnWidths = false // "The current column width change is triggered by the program"
+
+Var hasUserCustomizedColumns = false // "Has the user adjusted manually"
+
+@Objc func columnDidResize(_ notification: Notification) {
+
+If! isApplyingAutoColumnWidths {
+
+hasUserCustomizedColumns = true
+
+}
+
+}
+
+Func applyAutoColumnWidths() {
+
+Guard! hasUserCustomizedColumns else { return }
+
+isApplyingAutoColumnWidths = true
+
+Defer { isApplyingAutoColumnWidths = false }
+
+Let totalWidth = outlineView.bounds.width
+
+For (column, ratio) in zip(outlineView.tableColumns, columnRatios) {
+
+Column.width = totalWidth * ratio
+
+}
+
+}
+
+}
+
+```
+
+| Scene | Behavior |
+
+|-----|-----|
+
+| Open for the first time | Automatically distribute proportionally |
+
+| Window scaling (the user has not adjusted the column width) | Automatic redistribution |
+
+| Window zoom (the user has adjusted the column width) | Keep the user settings unchanged |
+
+| Refresh/switch root directory | Reset tags and reassign automatically |
+
+### 4.3 LocalRootFSService — File System Service Layer
+
+**Responsibilities**: Encapsulate all file system I/O operations and return pure data results without involving any UI logic.
+
+#### Path check
+
+````swift
+
+rootFSError: LocalizedError {
+
+Case path Empty
+
+Case pathNotFound(String)
+
+Case pathNotDirectory(String)
+
+Case accessDenied(String)
+
+Var errorDescription: String? {
+
+Switch self {
+
+Case .pathEmpty:
+
+Return "The rootfs mount path is not configured for this container."
+
+Case .pathNotFound(let p):
+
+Return "The path '\(p)' does not exist. The container may not be running."
+
+Case .pathNotDirectory(let p):
+
+Return "The path '\(p)' exists but is not a directory."
+
+Case .accessDenied(let p):
+
+Return "Access denied to '\(p)'. Check permissions or sandbox settings."
+
+}
+
+}
+
+}
+
+Func resolveRootURL(path: String) throws -> URL {
+
+Guard! path.isEmpty else { throw RootFSError.pathEmpty}
+
+Let url = URL(fileURLWithPath: path)
+
+Var isDir: ObjCBool = false
+
+Guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+
+Throw RootFSError.pathNotFound(path)
+
+}
+
+Guard isDir.boolValue else {
+
+Throw RootFSError.pathNotDirectory(path)
+
+}
+
+Return url
+
+}
+
+```
+
+#### Catalog enumeration
+
+````swift
+
+Func listDirectory(at url: URL, showHiddenFiles: Bool) throws -> [FileNode] {
+
+Let resourceKeys: Set<URLResourceKey> = [
+
+.Is Directory Key,
+
+.fileSizeKey,
+
+.contentModificationDateKey,
+
+.isHiddenKey,
+
+.localizedTypeDescriptionKey,
+
+]
+
+// 1 Use NSFileCoordinator to coordinate reading
+
+Var result: [FileNode] = []
+
+Var coordError: NSError?
+
+NSFileCoordinator().coordinate(
+
+readingItemAt:url,
+
+Options: .immediatelyAvailableMetadataOnly,
+
+Error: &coordError
+
+) {accessURL in
+
+// 2 Batch pre-tatch metadata
+
+Let contents=try? FileManager.default.contentsOfDirectory(
+
+At: accessURL,
+
+includingPropertiesForKeys: Array(resourceKeys),
+
+Options: []
+
+)
+
+Result=(contents?? []).compactMap { buildNode(from: $0, keys: resourceKeys)}
+
+}
+
+If let err = coordError { throw err }
+
+// 3 Hide file filter
+
+If! showHiddenFiles {
+
+Result=result.filter{! $0.isHidden}
+
+}
+
+// 4 Sorting: Table of contents in front + localization standard sorting
+
+Result.sort { a, b in
+
+If a.isDirectory! = b.isDirectory { return a.isDirectory}
+
+Return a.name.localizedStandardCompare(b.name) == .orderedAscending
+
+}
+
+Return result
+
+}
+
+```
+
+> **Function of NSFileCoordinator**: The file access coordination mechanism of macOS is used to avoid conflicts when multiple processes/threads access the same file at the same time. Even if this scene only reads, it is still valuable to use it:
+
+> - The directory may be written by system processes such as Spotlight index and Time Machine backup, and the coordinator ensures read consistency.
+
+> - `.immediatelyAvailableMetadataOnly` means "only read cached metadata and do not trigger network downloads". It is very important for network mounting volumes or iCloud Drive directories - to avoid accidentally triggering massive file downloads due to enumeration directories.
+
+> - When adding write operations (renaming/deleting) in the future, it can be seamlessly upgraded to read and write coordination.
+
+> **The performance significance of `includingPropertiesForKeys`**: The macOS file system (APFS/HFS+) can pre-retrie the specified metadata attributes in batches when enuming the directory (one system call). If keys are not specified, `url.resourceValues(forKeys:)` will be called one by one. Each file will trigger an independent `stat` system call. The performance difference under large directories (thousands of files) can reach the order of magnitude.
+
+> **`localizedStandardCompare` behavior**: Apple's recommended file name sorting method, consistent with Finder: localization comparison according to the current locale (Chinese according to Pinyin); natural sorting of numbers ("file2" in front of "file10"); ignore case.
+
+> **Hidden file judgment**: Use `URLResourceKey.isHiddenKey` than check`. ` Prefix is more accurate - some files in macOS are marked as hidden by BSD flag (`UF_HIDDEN`), and the file name is not `. ` The beginning.
+
+### 4.4 rootfs path resolution chain
+
+There is no unified standard for the mounting path of the container's rootfs on the host, and different containers have their own conventions at runtime. In order to maximize compatibility, the inference strategy of multi-source step-by-level fallback is adopted in `ContainerViewModel`:
+
+```
+
+Priority 1: Emplicit Path
+
+The rootfsMountPath field has been carried in the ContainerDetail model
+
+│
+
+├─ Non-empty → Use ✓
+
+▼ Empty → fallback
+
+Priority 2: Container Labels
+
+Read the following label keys (try in order):
+
+· arcbox.rootfs.mount.path
+
+· (Extensible to other agreement key)
+
+│
+
+├─ Find → Use ✓
+
+▼ Not found → fallback
+
+Priority 3: Mounts Analysis
+
+Traverse container mounts to find the entry of destination == "/"
+
+Take its source as the host path
+
+│
+
+├─ Find → Use ✓
+
+▼ Not found → fallback
+
+Priority 4: OrbStack Platform Agreement
+
+~/OrbStack/docker/containers/<containerName>
+
+│
+
+├─ Path exists → Use ✓
+
+▼ Does not exist → Give up, report pathEmpty error
+
+```
+
+> **Why do you need OrbStack**: OrbStack is a lightweight Docker running environment on macOS. Unlike Docker Desktop, OrbStack directly maps the container rootfs to the host user directory (`~/OrbStack/docker/containers/` through FUSE / VirtioFS, so that the files in the container can be directly browsed. Docker Desktop runs in Linux VM, and rootfs is not directly exposed to the host directory.
+
+The path analysis result is cached in the detail cache of `ContainersViewModel`. Container list refresh (polling or manual) will not clear the cached `rootfsMountPath` to avoid path loss and view reset caused by background refresh when users browse Files Tab.
+
+---
+
+## five. Key design decisions and principles
+
+### 5.1 Three-layer separation
+
+| Layer | Type | Responsibilities | Dependence |
+
+|----|-----|-------|-----|
+
+| ContainerFilesTab | SwiftUI View (struct) | Status Management, View Switching | SwiftUI Only |
+
+| LocalRootFSOutlineView | NSViewRepresentable (struct + Coordinator class) | Rendering, Interaction | AppKit |
+
+| LocalRootFSService | Pure Swift struct | File I/O | Foundation |
+
+This kind of stratification makes:
+
+- **LocalRootFSService** can be tested independently (just pass into the temporary directory).
+
+- **LocalRootFSOutlineView** can be replaced by other implementations in the future.
+
+- **ContainerFilesTab** can be embedded in any SwiftUI container (Tab / Sheet / NavigationDetail).
+
+### 5.2 Why is Coordinator necessary?
+
+SwiftUI's `NSViewRepresentable` struct is a value type, and each body recalculation may be recreated. And the delegate/datasource of `NSOutlineView` needs a stable reference type object. The life cycle of `Coordinator` is managed by SwiftUI and aligned with `NSView`, which is the correct location to store the following:
+
+- Tree node data (`rootNodes: [FileNode]`)
+
+- Asynchronous control state (`generation`)
+
+- Column width management status (`hasUserCustomizedColumns`)
+
+- delegate/datasource implementation
+
+### 5.3 Why not recursively preloaded
+
+A typical Linux container rootfs contains tens of thousands to hundreds of thousands of files. Recursive preloading will lead to: a startup delay of a few seconds; each `FileNode` is about 200–400 bytes, 100,000 nodes ≈ 20–40 MB; and users usually only browse a few directories. Lazy loading limits the first screen to a direct sub-item of the root directory (usually dozens to hundreds), and the single-layer reading time is 1–10ms (SSD), almost insensitive.
+
+---
+
+## six Performance and syncurrency strategy
+
+### 6.1 Thread Model
+
+```
+
+┌────────────────┐┌────────────────┐
+
+│ Main Thread │ │ Background Queue │
+
+│ (UI rendering/interaction) │ │ (file system I/O) │
+
+├──────────────┤├────────────────┤
+
+│ · NSOutlineView │ │ · listDirectory()│
+
+│ delegate callback │ ──────→ │ · Metadata reading │
+
+│ · User Interaction Events │ │ · Sort & Filter │
+
+│ · reloadItem() │ ←────── │ │
+
+│ · Status update │ │ │
+
+└────────────────┘ └──────────────┘
+
+```
+
+### 6.2 Generation Intergenerational Token
+
+This is the core mechanism to prevent asynchronous results from overwriting wrong data. When the user switches the container or refreshes, the old asynchronous reading may still be in progress:
+
+````swift
+
+Class Coordinator {
+
+Private var generation: UInt64 = 0
+
+Func reload(for newRootURL: URL) {
+
+Generation &+= 1
+
+Let capturedGen = generation
+
+rootNodes.removeAll()
+
+outlineView.reloadData() // Clear the display first
+
+DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+
+Let items = try? Self?.service.list Directory(at: newRootURL, ...)
+
+DispatchQueue.main.async {
+
+Guard let self = self,
+
+Self.generation == capturedGen // ← Discard if expired
+
+Else {return}
+
+self.rootNodes=items?? []
+
+self.outlineView.reloadData()
+
+}
+
+}
+
+}
+
+}
+
+```
+
+**Scene demonstration**:
+
+```
+
+T=0ms The user selects the container A → generation=1, and starts loading A's rootfs
+
+T=200ms The user switches to the container B → generation=2, clears the UI, and starts loading B
+
+T=350ms B Loading completed, capturedGen=2 == generation=2 ✅ → Render B
+
+T=500ms A Loading completed, capturedGen=1! = generation=2 ❌ → discard
+
+```
+
+> **`&+=` Operator**: `&+` in Swift is overflow addition. Ordinary `+` triggers runtime crash (Swift default behavior) when `UInt64` overflows, and `&+` quietly goes back to 0. Although the maximum value of `UInt64` is about 1.8×10¹9, it is actually impossible to overflow, using `&+=` is a defensive programming habit.
+
+### 6.3 Empty first and then load
+
+````swift
+
+rootNodes.removeAll()
+
+outlineView.reloadData() // Clear the interface immediately
+
+//... Then load the new data asynchronously.
+
+```
+
+Make sure that there is no visual inconsistency of "new container title + old container file list" at the moment of switching.
+
+---
+
+## seven. State machine and error handling
+
+### 7.1 View Status Machine
+
+```
+
+┌─────────┐
+
+│ Initialization │
+
+└────┬─────┘
+
+│ onAppear / Container Change
+
+▼
+
+┌────────────┐
+
+┌──────│ Loading │──────┐
+
+│ └────────────┘ │
+
+│ Success │ Failure
+
+▼▼
+
+┌──────────────┐ ┌────────────┐
+
+│ Normal display │ │ Wrong state │
+
+│ (File tree is available) │ │ (classification error copywriting │
+
+│ │ │ + refresh button) │
+
+└──────┬─────┘ └──────┬─────┘
+
+│ User click refresh │ User click refresh
+
+└──────────┐┌───────┘
+
+▼▼
+
+┌────────────┐
+
+│ Loading │
+
+└────────────┘
+
+```
+
+### 7.2 Path missing special state
+
+When the rootfs path of the container cannot be inferred from any source, the Files Tab displays a special "path missing" prompt (`pathEmpty` error) instead of a general error message. This helps users understand that the problem is in the "configuration/environment" rather than the "program error".
+
+### 7.3 Sub-type error feedback
+
+| Error Type | Copywriting Examples | User Actions |
+
+|--------|---------|--------|
+
+| `pathEmpty` | "The rootfs mount path is not configured" | Check the container configuration or operating environment |
+
+| `pathNotFound` | "Path '/xxx' does not exist, the container may not be running" | Refresh after starting the container |
+
+| `pathNotDirectory` | "'/xxx' is not a directory" | Check whether the path is correct |
+
+| `accessDenied` | "No permission to access '/xxx'" | Check permissions or sandbox settings |
+
+---
+
+## eight. Problems encountered and solutions
+
+### Question 1: Rootfs path source is unstable (different operating environments and different data source field differences)
+
+**Phenomenon**: Not all containers provide unified fields; some are in labels, some are in mounts, and some can only be inferred according to the platform agreement.
+
+**Root cause**: Container runtime and container arrangement tools expose rootfs in different ways on the host, and this information is not part of the OCI container standard.
+
+**Solve**: Establish a multi-source inference chain (explicit path → Labels → Mounts → OrbStack agreement) in `ContainerViewModel.inferRootFSMountPath`, and add the platform path to the bottom.
+
+**Results**: The hit rate of path analysis is significantly improved, reducing the "Files Tab blank/unavailable" scenario.
+
+### Question 2: Directory reading may cause the main thread to be stuck or asynchronous write back misaligned.
+
+**Phenomenon**: The direct main thread reading the directory will affect the interactive response; during the switching container/refresh, the old asynchronous task may overwrite the new state.
+
+**Solve**:
+
+- Directory reading is placed in the background queue (`DispatchQueue.global(qos: .userInitiated)`).
+
+- Verify the validity of asynchronous results through the `generation` intergenerational token (see Section 6.2).
+
+- Empty and reload first when switching to avoid the old state remaining (see Section 6.3).
+
+**Results**: Interaction fluency and data consistency are improved.
+
+### Question 3: There is a conflict between the automatic layout of column width and the user's manual adjustment
+
+**Phenomenon**: When the window size changes, the column width needs to be automatically adjusted, but the user does not want to be overwritten by the system after manual adjustment.
+
+**Solve**:
+
+- Distinguish between "program adjustment" and "user adjustment" (`isApplyingAutoColumnWidths` + notification judgment).
+
+- After the user adjusts, set `hasUserCustomizedColumns`, and subsequent non-mandatory scenes will no longer be automatically rewritten.
+
+**Result**: It takes into account the availability and controllability of the box, and the behavior is close to the native Finder table experience.
+
+### Question 4: Unclear error feedback leads to high troubleshooting costs
+
+**Phenomenon**: If the path is missing, the path does not exist, the not the directory and other failure scenarios report an error uniformly, it is difficult for users to locate the reason.
+
+**Solve**: `LocalRootFSService.RootFSError` provides sub-type error copy (see Section 7.3); Files Tab provides clear error state and refresh entrance.
+
+**Results**: The failure scenario is more diagnosed, and users can restore or further locate configuration problems by themselves.
+
+---
+
+## nine. Follow-up optimization direction
+
+### Short-term
+
+| Direction | Description |
+
+| ---------- | ----------------- |
+
+| Permission/Soft Link Abnormal Tips | Provide finer-grained copywriting when sandbox restrictions, symbolic link loops or broken links |
+
+| File search | Toolbar search box, filter loaded nodes |
+
+| Column sorting | Click the column header to switch sorting (name/size/date/type) |
+
+### Mid-term
+
+| Direction | Description |
+
+|-----|-----|
+
+| File operation ability | Rename, delete, create new directory, drag and drop (need to introduce write coordination + Undo) |
+
+| Column width persistence | Deposit column width preferences into `UserDefaults` and maintain them across sessions |
+
+| Large catalog monitoring indicators | Number of nodes, loading delay, memory occupancy and other performance indicators |
+
+### Long-term
+
+| Direction | Description |
+
+|-----|-----|
+
+| More runtime support | Supplement Colima, Rancher Desktop, Podman Desktop and other agreements in the path analysis chain |
+
+| Remote file browsing | Realize file browsing of non-local containers through Docker API / exec + tar |
+
+| FSEvents Incremental Refresh | Automatically refresh affected nodes by monitoring directory changes through `DispatchSource` |****
