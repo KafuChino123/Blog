@@ -1,0 +1,149 @@
+# React 类组件 🆚 函数式组件
+
+### 函数组件和类组件的区别
+
+#### 1. **语法差异**
+
+- **类组件**：使用 `class` 关键字定义，必须继承 `React.Component` 或 `React.PureComponent`。
+    
+- **函数式组件**：使用 `function` 或箭头函数定义，函数本身就是组件。
+    
+#### 2. **状态管理**
+
+- **类组件**：使用 `this.state` 和 `this.setState()` 来管理组件的状态。
+    
+- **函数式组件**：使用 `useState` Hook 来管理状态。
+    
+#### 3. **生命周期方法**
+
+- **类组件**：有完整的生命周期方法（如 `componentDidMount`, `componentDidUpdate`, `componentWillUnmount` 等）。
+    
+- **函数式组件**：没有内建生命周期方法，但是可以通过 `useEffect` Hook 来模拟生命周期行为。
+    
+#### 4. **性能优化**
+
+- **类组件**：有 `shouldComponentUpdate` 或 `React.PureComponent` 来避免不必要的更新。
+    
+- **函数式组件**：使用 `React.memo` 或 `useMemo`, `useCallback` 来优化渲染。
+    
+### 函数式组件中的生命周期模拟
+
+在函数式组件中，常用的生命周期方法被 `useEffect` 取代。我们通过不同的 `useEffect` 配置来模拟类组件中的生命周期行为。
+
+#### 1. **模拟 `componentDidMount` 和 `componentWillUnmount`**
+
+在函数式组件中，`useEffect` 用来模拟 `componentDidMount` 和 `componentWillUnmount`，只需将副作用逻辑放在 `useEffect` 中，并返回一个清理函数来模拟卸载过程。
+
+```jsx
+import React, { useState, useEffect } from 'react';
+
+function Timer() {
+  const [seconds, setSeconds] = useState(0);
+
+  // 相当于 componentDidMount 和 componentWillUnmount
+  useEffect(() => {
+    const timerId = setInterval(() => {
+      setSeconds(prev => prev + 1);
+    }, 1000);
+
+    // 清理函数，相当于 componentWillUnmount
+    return () => {
+      clearInterval(timerId);
+    };
+  }, []);  // 空依赖数组确保只在组件挂载和卸载时运行
+
+  return <p>Timer: {seconds} seconds</p>;
+}
+```
+
+#### 2. **模拟 `componentDidUpdate`**
+
+如果你想在组件的 `props` 或 `state` 变化后执行副作用，可以通过 `useEffect` 来模拟 `componentDidUpdate`。只需要在依赖数组中传递需要监控的 `props` 或 `state`。
+
+```jsx
+import React, { useState, useEffect } from 'react';
+
+function SearchResults({ query }) {
+  const [results, setResults] = useState([]);
+
+  // 相当于 componentDidUpdate
+  useEffect(() => {
+    // 模拟 API 请求
+    fetchSearchResults(query)
+      .then(data => setResults(data))
+      .catch(error => console.error('Error fetching results:', error));
+  }, [query]);  // 当 query 发生变化时，重新执行副作用
+
+  return (
+    <div>
+      <h2>Search Results for: {query}</h2>
+      <ul>
+        {results.map(result => (
+          <li key={result.id}>{result.name}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+在这个例子中，`useEffect` 会在 `query` 更新时重新执行副作用，类似于类组件中的 `componentDidUpdate`。
+
+#### 3. **模拟 `getDerivedStateFromProps`**
+
+React 没有为函数式组件提供类似 `getDerivedStateFromProps` 的钩子。但是你可以通过 `useEffect` 和 `useState` 来模拟。
+
+```jsx
+import React, { useState, useEffect } from 'react';
+
+function MyComponent({ name }) {
+  const [displayName, setDisplayName] = useState(name);
+
+  useEffect(() => {
+    setDisplayName(name);  // 类似于 getDerivedStateFromProps
+  }, [name]);  // 依赖项是 name，保证 name 变化时更新 state
+
+  return <p>{displayName}</p>;
+}
+```
+
+这里，`useEffect` 监控 `name` 变化，当 `name` 改变时，更新组件的 `displayName`。
+
+#### 4. **模拟 `shouldComponentUpdate`**
+
+虽然 `useEffect` 没有直接模拟 `shouldComponentUpdate` 的功能，但你可以通过 `React.memo` 来避免不必要的重新渲染。
+
+```jsx
+const ListItem = React.memo(({ item }) => {
+  console.log('ListItem rendered');
+  return <li>{item.name}</li>;
+});
+
+function ItemList({ items }) {
+  return (
+    <ul>
+      {items.map(item => (
+        <ListItem key={item.id} item={item} />
+      ))}
+    </ul>
+  );
+}
+```
+
+`React.memo` 会优化 `ListItem` 组件的性能，只有当 `item` 发生变化时才重新渲染。
+### 总结
+
+#### 类组件的生命周期方法：
+
+- 通过 `componentDidMount`, `componentWillUnmount`, `componentDidUpdate`, `getDerivedStateFromProps` 等方法来管理副作用、状态更新、清理等。
+    
+#### 函数组件的生命周期管理：
+
+- 通过 `useState` 管理状态，`useEffect` 模拟生命周期方法。
+    
+- `useEffect` 可以模拟 `componentDidMount`, `componentDidUpdate`, `componentWillUnmount`。
+    
+- `React.memo` 和其他 hooks (`useMemo`, `useCallback`) 可以用来优化性能。
+    
+
+随着 React Hooks 的引入，函数式组件现在已经成为了 React 编程的主流方式，并且在大多数场景下会比类组件更简洁和灵活。
