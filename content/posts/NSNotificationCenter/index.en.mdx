@@ -1,0 +1,271 @@
+# NS Notification Center
+
+[Apple Developer](https://developer.apple.com/documentation/foundation/nsnotificationcenter? Language=objc)
+
+[Rare Earth Nugget Reference] (https://juejin.cn/post/6844903566209974280)
+
+==A notification dispatch mechanism that enables the broadcast of information to registered observers. ==
+
+NSNotificationCenter is a notification scheduling mechanism that allows notifications to be broadcast to registered observers.
+
+A message can be received by multiple observers, and an observer can also accept multiple messages.
+
+Note: NSNotificationCenter can only deliver notifications in a single application; if you want to publish notifications to other processes or receive notifications from other processes, please use NSDistributedNotificationCenter (note that it is only available on macOS 10.0+ and not in iOS).
+
+#### 1 Basic usage
+
+In NSNotification.h:
+
+![]( NSNotification.h.png)
+
+```Objective-C
+
+@Property (class, readonly, strong) NSNotificationCenter *defaultCenter;
+
+```
+
+This attribute is the only single instance to obtain `NSNotificationCenter`, which is a message distribution center. By using this unique instance, we can == add notifications, send notifications, and remove notifications ==.
+
+##### 1.1 Add notifications (subscription notifications)
+
+```Objective-C
+
+[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object:_obj0];
+
+```
+
+`_obj0` is an instance created, and the usage of the `object` parameter will not be discussed here for the time being. `Observer` is the responder; `selector` is a method of responding to notifications, which requires [[0️⃣ Objective-C Basic #^21f94f| SEL type]]; `name` is an identification, and the notification center mainly uses it to achieve accurate distribution of messages (of course, object also has a positioning role).
+
+- When the name is empty, it means that the notification of any name is subscribed.
+
+- When object is empty, it means that any sender has been notified and subscribed.
+
+- When both name and object are empty, it means that all notifications are subscribed, including system notifications. == All system notifications can be monitored through this method. ==
+
+- When name and object are not empty, it means that only the specified notification name and the sender are notified.
+
+##### 1.2 Send notifications
+
+```Objective-C
+
+//Convenient method, which will be more commonly used in business
+
+[[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:_obj0 userInfo:@{@"key":@"_obj0"}];
+
+//Use NSNotification
+
+NSNotification *notification = [[NSNotification alloc] initWithName:@"test0" object:_obj2 userInfo:@{@"key":@"_obj2"}];
+
+[[NSNotificationCenter defaultCenter] postNotification:notification];
+
+```
+
+Sending notifications corresponds to adding notifications, which requires `name, object` parameters, and there is an additional ==`userInfo`==. This parameter == can send the data that needs to be carried to the responder of the notification ==.
+
+In fact, we can easily think that the convenient method of sending notifications is just a **grammatical sugar** for sending notifications using `NSNotification`, and `NSNotification` is the message body.
+
+##### 1.3 Remove the notification
+
+```Objective-C
+
+//Remove all the notifications of the responder
+
+[NSNotificationCenter defaultCenter] removeObserver:self];
+
+//Remove all notifications of the responder name==@"test0"
+
+[[NSNotificationCenter defaultCenter] removeObserver:self name:@"test0" object:nil];
+
+//Remove all notifications of the responder name==@"test0" and object==_obj0
+
+[[NSNotificationCenter defaultCenter] removeObserver:self name:@"test0" object:_obj0];
+
+```
+
+The three methods of removing notifications are becoming more and more "accurate" from top to bottom.
+
+It is crucial to remove the notification in a reasonable place:
+
+- Let the responder who does not want to continue to receive the notice lose the response to the notification;
+
+- ==Avoid adding the same notification repeatedly == (when the memory of the responder is the same);
+
+- == The notification center uses `unsafe_unretained` to modify the responder `observer`. When the responder releases it, a wild pointer will appear, causing a crash to send a message to the wild pointer ==; After iOS x (the updated system version is to be verified), Apple has optimized it and will execute the `removeObserver:` method when the responder calls the `dealloc` method.
+
+Note: ** The problem will be analyzed in detail later. **
+
+However, regular business scenarios are generally removed when the responder is released.
+
+```Objective-C
+
+-(Void)dealloc {
+
+[NSNotificationCenter defaultCenter] removeObserver:self];
+
+}
+
+```
+
+##### 1.4 Response Notification
+
+When responding to the notification, the `NSNotification` message body will be passed, as shown in the code:
+
+```Objective-C
+
+- (void)respondsToNotification:(NSNotification *)noti {
+
+Id obj = noti.object;
+
+NSDictionary *dic = noti.userInfo;
+
+NSLog(@"\n- self:%@ \n- obj:%@ \n- notificationInfo:%@", self, obj, dic);
+
+}
+
+```
+
+#### 2. `object:(nullable id) object` parameter
+
+- When **adding notifications**, if the `object` parameter is specified, the responder will only receive the notification that the `object` parameter is specified as ==the same instance== when **sending the notification**;
+
+- When **sending the notification**, if the `object` parameter is specified, it will not affect the response person who did not specify the `object` parameter when **adding the notification** to receive the notification.
+
+Example 1: Because `object==nil` is added when the notification is added, the responder == can still receive the notification ==.
+
+```Objective-C
+
+//Add notifications
+
+[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object:nil];
+
+//Send a notification
+
+[[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:_obj0];
+
+```
+
+Example 2: Because `object==_obj0` is specified when adding a notification, and `object==nil` is sent, so == cannot receive the notification == (only when `object==_obj0` can receive the notification).
+
+```Objective-C
+
+//Add notifications
+
+[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object: _obj0];
+
+//Send a notification
+
+[[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:nil];
+
+```
+
+#### 3. Notification thread problem
+
+Conduct the following test - we enter the global queue to send a notification:
+
+```Objective-C
+
+dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+
+NSLog(@"Send Notifications currentThread : %@", [NSThread currentThread]);
+
+[[NSNotificationCenter defaultCenter] postNotificationName:@"test0" object:nil];
+
+});
+
+```
+
+Print the thread information at the place where the notification is received:
+
+```Objective-C
+
+Send notification currentThread : <NSThread: 0x60400046aec0>{number = 3, name = (null)}
+
+Response notification currentThread : <NSThread: 0x60400046aec0>{number = 3, name = (null)}
+
+```
+
+It can be concluded that == the thread that sends the notification and the thread that receives the notification are the same ==. From this point of view, if we are not 100% sure that the sending queue of the notification is in the main queue, it is better to add some code to process the UI to prevent problems such as untimely interface updates or even crashes:
+
+```Objective-C
+
+If (strcmp(dispatch_queue_get_label(DISPATCH_CURRENT_QUEUE_LABEL), dispatch_queue_get_label(dispatch_get_main_queue()))) == 0) {
+
+//UI processing
+
+} other {
+
+Dispatch_async(dispatch_get_main_queue(), ^{
+
+//UI processing
+
+});
+
+}
+
+```
+
+#### 4. Do you need to remove the notification?
+
+If the notification may be added repeatedly, we should deal with it accordingly.
+
+The following code simulates the repeated addition of notifications:
+
+```Objective-C
+
+For (int i = 0; i < 3; i++) {
+
+[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(respondsToNotification:) name:@"test0" object:nil];
+
+}
+
+```
+
+The result of this code is that **the response notification callback will go three times**.
+
+Some people may ask why the system library didn't make a judgment of repeated additions? Of course, this may be for us to use it more flexibly, or it may be a compromise on the complexity of time😁.
+
+Students who have had a long period of development experience should have had an unexpected collapse without timely removal notice. As mentioned earlier, == the notification center uses unsafe_unretained modification == for the responder `observer`. When the responder releases, a wild pointer will appear. If a message is sent to the wild pointer, it will cause a crash. After the iOS8 system (the earlier version was not tested), `[NSNotificationCenter defaultCenter]` will execute the `-removeObserver:` method when the responder `observer` calls the `-dealloc` method.
+
+For this point, we can do an experiment:
+
+Create a new classification of `NSNotificationCenter`, the code is as follows:
+
+```Objective-C
+
+@Implementation NSNotificationCenter (YB)
+
++ (void)load {
+
+Method origin = class_getInstance Method([self class], @selector(removeObserver:));
+
+Method current = class_getInstance Method([self class], @selector(_removeObserver:));
+
+method_exchangeImplementations(origin, current);
+
+}
+
+-(void)_removeObserver:(id)observer {
+
+NSLog(@"Call removal notification method: %@", observer);
+
+//[self_removeObserver:observer];
+
+}
+
+@End
+
+```
+
+Then create a new class normal usage notification, but please do not manually release the notification in `-dealloc` (we want to do an experiment). Then we release this class (you can use the controller present and dismiss):
+
+```xml
+
+Call the removal notification method: <Test_VC: 0x7f9a0a4d9240>
+
+```
+
+A magical phenomenon has occurred. By comparing the memory address, `[NSNotificationCenter defaultCenter]` did call the `removeObserver :` method to remove the notification listening of the corresponding responder.
+
+Note that in the above code, we have commented `[self _removeObserver:observer];`, which means that the method has been intercepted by me, and then we will send a notification to the responder `observer` of the "remove notification attempt", which will crash directly. When the comment is removed, it works normally and does not need to be removed manually.
+
+** Conclusion: If the iOS support version is iOS8 or above, in most cases, there is no need to remove the notification in theory, but due to historical legacy, developer habits and other factors, it depends on personal preferences. **
