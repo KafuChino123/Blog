@@ -1,0 +1,713 @@
+# SwiftUI + NSOutlineView 实现类 Finder File Tab
+
+> **技术栈**：SwiftUI / AppKit（NSViewRepresentable）/ macOS
+> **关键词**：NSOutlineView · 文件树 · 懒加载 · 多列表格 · 桥接
+> **背景**：在容器管理桌面应用中为 Files Tab 实现本地 rootfs 文件浏览
+
+## 1. 概述与目标
+
+本文档描述如何在 macOS SwiftUI 应用中，通过 `NSViewRepresentable` 桥接 `NSOutlineView`，实现一个 **类 Finder 的 File Tab**——支持多列树形结构、目录懒加载、原生桌面级交互。
+
+实际应用场景是容器管理工具的详情页 Files Tab：将容器对应的 rootfs 本地挂载目录以 Finder 风格呈现，支持浏览、打开、定位等操作。
+
+### 核心目标
+
+| # | 目标 | 验收标准 |
+|---|------|----------|
+| 1 | 自动解析容器 rootfs 本地路径 | 多来源推断链，主流环境下可用 |
+| 2 | Finder 级多列树形视图 | Name / Date Modified / Size / Kind 四列 |
+| 3 | SwiftUI + AppKit 稳定桥接 | 无崩溃、无内存泄漏 |
+| 4 | 大目录场景流畅 | 懒加载 + 后台读取，主线程无阻塞 |
+| 5 | 异常状态可恢复 | 分类型错误提示 + 刷新入口 |
+
+---
+
+## 2. 为什么不用纯 SwiftUI
+
+macOS 上 SwiftUI 的 `List` / `OutlineGroup` 存在以下局限：
+
+| 能力          | SwiftUI OutlineGroup    | NSOutlineView                               |
+| ----------- | ----------------------- | ------------------------------------------- |
+| 多列支持        | ❌ 需 HStack 模拟，列头/列宽均需手写 | ✅ 原生多列，列头排序、拖拽调宽开箱可用                        |
+| 右键先选中再弹菜单   | ❌ `.contextMenu` 不改变选中态 | ✅ 可在 `rightMouseDown` 中先 `selectRowIndexes` |
+| 双击区分展开/打开   | ❌ 需要自行判断                | ✅ `doubleAction` + `clickedRow` 原生支持        |
+| 大数据 diff 性能 | ⚠️ 数据源变化时对整棵树 diff      | ✅ delegate/datasource 按需加载                  |
+| 拖放          | ⚠️ API 有限               | ✅ 原生 drag & drop 协议                         |
+
+`NSOutlineView` 是 macOS Finder 自身使用的控件家族成员，对"多列 + 树结构 + 桌面级交互"的支持远比 SwiftUI 成熟。因此采用 **SwiftUI 外壳 + `NSViewRepresentable` 桥接 `NSOutlineView`** 的混合架构。
+
+---
+
+## 3. 整体架构
+
+```
+┌───────────────────────────────────────────────────────┐
+│                 ContainerFilesTab                     │
+│             (SwiftUI View — 状态编排层)                 │
+│  ┌────────────┐  ┌──────────┐  ┌───────────────────┐  │
+│  │ Toolbar    │  │ Error    │  │ Loading / Empty   │  │
+│  │(刷新/隐藏)  │  │ State    │  │ State             │  │
+│  └─────┬──────┘  └────┬─────┘  └────────┬──────────┘  │
+│        │              │                  │            │
+│        ▼              ▼                  ▼            │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │          LocalRootFSOutlineView                  │ │
+│  │       (NSViewRepresentable — 渲染层)              │ │
+│  │  ┌─────────────────────────────────────────┐     │ │
+│  │  │        NSOutlineView (AppKit)           │     │ │
+│  │  │  ┌──────┬──────────┬───────┬─────────┐  │     │ │
+│  │  │  │ Name │ Date Mod │ Size  │  Kind   │  │     │ │
+│  │  │  ├──────┴──────────┴───────┴─────────┤  │     │ │
+│  │  │  │  📁 etc/                          │  │     │ │
+│  │  │  │  📁 var/                          │  │     │ │
+│  │  │  │  📄 .dockerenv                    │  │     │ │
+│  │  │  └───────────────────────────────────┘  │     │ │
+│  │  └─────────────────────────────────────────┘     │ │
+│  └──────────────────────────────────────────────────┘ │
+└───────────────────────────┬───────────────────────────┘
+                            │
+                            ▼
+                ┌──────────────────────┐
+                │  LocalRootFSService  │
+                │  (文件系统服务层)      │
+                │  · 路径校验           │
+                │  · 目录枚举           │
+                │  · 排序 & 过滤        │
+                └──────────────────────┘
+```
+
+### 数据流
+
+```
+用户操作 (展开目录 / 刷新 / 切换隐藏文件 / 切换容器)
+    │
+    ▼
+ContainerFilesTab (SwiftUI @State 驱动)
+    │
+    ├─ 路径变更 → resolveRootURL() → 校验 → 设定 rootURL
+    │
+    ▼
+LocalRootFSOutlineView (NSViewRepresentable)
+    │
+    ├─ 展开节点 → outlineViewItemWillExpand
+    │                  │
+    │                  ▼
+    │          listDirectory() (后台队列)
+    │                  │
+    │                  ▼ (generation 校验)
+    │          主线程回填 children → reloadItem()
+    │
+    ├─ 双击 → 目录：展开/折叠；文件：NSWorkspace.shared.open()
+    ├─ 右键 → Context Menu (Open / Reveal in Finder / Copy Path)
+    │
+    ▼
+UI 更新
+```
+
+---
+
+## 4. 核心模块详解
+
+### 4.1 ContainerFilesTab — SwiftUI 状态编排层
+
+**职责**：管理 Files Tab 的所有顶层状态和用户交互入口。本身不接触任何 AppKit API。
+
+#### 状态定义
+
+```swift
+struct ContainerFilesTab: View {
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var showHiddenFiles: Bool = Self.finderDefaultShowHidden
+    @State private var selectedItems: Set<URL> = []
+    @State private var rootURL: URL?
+}
+```
+
+#### 隐藏文件默认值
+
+初始值从系统 Finder 偏好读取：
+
+```swift
+private static var finderDefaultShowHidden: Bool {
+    UserDefaults(suiteName: "com.apple.finder")?
+        .bool(forKey: "AppleShowAllFiles") ?? false
+}
+```
+
+> **补充说明**：macOS 每个应用的偏好设置存储在 `~/Library/Preferences/` 下的 plist 文件中。通过 `UserDefaults(suiteName:)` 可跨应用读取。这里读取 Finder 的 `AppleShowAllFiles` 键值，使 Files Tab 初始行为与用户系统设置保持一致。若用户从未设置过（键不存在），默认 `false`——与 macOS 出厂行为相同。
+
+#### 工具栏
+
+| 按钮 | 行为 |
+|------|------|
+| 🔄 刷新 | 重新 resolve 路径 + 重载文件树 |
+| 👁 显示/隐藏文件 | 切换 `showHiddenFiles`，触发 OutlineView reload |
+
+#### 视图结构（简化）
+
+```swift
+var body: some View {
+    VStack(spacing: 0) {
+        toolbar
+
+        if isLoading {
+            ProgressView("Loading…")
+        } else if let error = errorMessage {
+            ErrorStateView(message: error, onRetry: reload)
+        } else if let url = rootURL {
+            LocalRootFSOutlineView(
+                rootURL: url,
+                showHiddenFiles: showHiddenFiles,
+                selectedItems: $selectedItems
+            )
+        } else {
+            EmptyStateView(message: "No root path configured for this container.")
+        }
+    }
+    .onAppear { resolveAndLoad() }
+}
+```
+
+### 4.2 LocalRootFSOutlineView — NSViewRepresentable 桥接层
+
+**职责**：通过 `NSViewRepresentable` 将 `NSOutlineView` 嵌入 SwiftUI，处理文件树的全部渲染与交互。
+
+#### NSViewRepresentable 生命周期
+
+`NSViewRepresentable` 是 SwiftUI 提供的协议，用于将 AppKit 视图嵌入 SwiftUI 视图层级：
+
+```
+makeCoordinator()               → 创建 Coordinator（引用类型），充当 delegate/datasource
+makeNSView(context:)            → 创建并配置 NSScrollView + NSOutlineView（仅调用一次）
+updateNSView(_:context:)        → SwiftUI 状态变化时调用，同步新状态到 AppKit
+dismantleNSView(_:coordinator:) → 视图销毁时调用（可选清理）
+```
+
+其中 `Coordinator` 是核心角色——它是一个 `class` 实例，持有 `NSOutlineView` 引用，并实现 `NSOutlineViewDataSource` + `NSOutlineViewDelegate`。因为 SwiftUI 视图本身是 struct（每次 body 重算都会重建），所有需要跨生命周期保持的可变状态都要放在 Coordinator 中。
+
+#### 文件节点数据模型
+
+```swift
+class FileNode {
+    let url: URL
+    let name: String
+    let isDirectory: Bool
+    let fileSize: Int64?
+    let modificationDate: Date?
+    let kind: String            // 本地化类型描述，如 "JPEG Image"
+    let isHidden: Bool
+    var children: [FileNode]?   // nil = 未加载, [] = 空目录
+    var isLoading = false       // 子节点正在后台加载
+}
+```
+
+> **为什么是 class 而非 struct？**
+> `NSOutlineView` 的 DataSource 方法（`outlineView(_:child:ofItem:)`）通过**对象引用**标识节点。内部维护了一张 `item → row` 映射表，依赖引用稳定性（`===`）。如果用 struct（值类型），每次访问都产生副本，`NSOutlineView` 无法正确追踪展开/选中状态，会导致箭头状态丢失或崩溃。
+
+> **`children: nil` vs `children: []` 的语义区分**
+> 这是懒加载的基础。`nil` 表示"未加载，可能有内容"→ 显示展开箭头；`[]` 表示"已加载但为空"→ 不显示箭头。`NSOutlineView` 的 `isItemExpandable` 返回 `true` 当且仅当 `isDirectory && (children == nil || !children!.isEmpty)`。
+
+#### 四列配置
+
+| 列标识 | 标题 | 初始宽度比例 | 内容 |
+|--------|------|-------------|------|
+| `name` | Name | 45% | 文件系统图标 + 文件名 |
+| `dateModified` | Date Modified | 25% | `yyyy-MM-dd HH:mm` |
+| `size` | Size | 15% | 人类可读大小（目录显示 `--`） |
+| `kind` | Kind | 15% | 本地化文件类型（通过 `localizedTypeDescriptionKey`） |
+
+```swift
+func makeNSView(context: Context) -> NSScrollView {
+    let outlineView = NSOutlineView()
+    outlineView.headerView = NSTableHeaderView()
+
+    let columns: [(id: String, title: String, ratio: CGFloat)] = [
+        ("name",         "Name",          0.45),
+        ("dateModified", "Date Modified", 0.25),
+        ("size",         "Size",          0.15),
+        ("kind",         "Kind",          0.15),
+    ]
+
+    for col in columns {
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(col.id))
+        column.title = col.title
+        column.minWidth = 60
+        outlineView.addTableColumn(column)
+    }
+
+    outlineView.outlineTableColumn = outlineView.tableColumns.first  // Name 列带展开箭头
+    outlineView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
+    outlineView.target = context.coordinator
+    outlineView.delegate = context.coordinator
+    outlineView.dataSource = context.coordinator
+
+    let scrollView = NSScrollView()
+    scrollView.documentView = outlineView
+    scrollView.hasVerticalScroller = true
+    return scrollView
+}
+```
+
+#### 懒加载流程
+
+```
+用户点击展开箭头
+    │
+    ▼
+outlineView(_:isItemExpandable:) → return node.isDirectory
+    │
+    ▼
+outlineViewItemWillExpand(_:) — Coordinator 中实现
+    │
+    ├─ node.children == nil ?
+    │      │
+    │      ├─ YES → node.isLoading = true
+    │      │         │
+    │      │         ▼
+    │      │    DispatchQueue.global(qos: .userInitiated).async {
+    │      │        let items = service.listDirectory(at: node.url, ...)
+    │      │        DispatchQueue.main.async {
+    │      │            guard self.generation == capturedGen else { return }
+    │      │            node.children = items
+    │      │            node.isLoading = false
+    │      │            outlineView.reloadItem(node, reloadChildren: true)
+    │      │        }
+    │      │    }
+    │      │
+    │      └─ NO → children 已有值，直接展开
+    │
+    ▼
+outlineView(_:numberOfChildrenOfItem:) → return node.children?.count ?? 0
+outlineView(_:child:ofItem:)           → return node.children![index]
+```
+
+#### 交互实现
+
+**双击打开**：
+
+```swift
+@objc func handleDoubleClick(_ sender: NSOutlineView) {
+    let row = sender.clickedRow
+    guard row >= 0, let node = sender.item(atRow: row) as? FileNode else { return }
+
+    if node.isDirectory {
+        if sender.isItemExpanded(node) {
+            sender.collapseItem(node)
+        } else {
+            sender.expandItem(node)
+        }
+    } else {
+        NSWorkspace.shared.open(node.url)
+    }
+}
+```
+
+**右键菜单（先选中再弹出）**：
+
+Finder 的标准行为是：右键点击未选中的行时，先将该行设为选中状态，然后再弹出上下文菜单。许多第三方文件管理器忽略了这一细节，导致右键菜单的操作对象与视觉选中状态不一致。实现方式是在自定义 `NSOutlineView` 子类或 Coordinator 中处理：
+
+```swift
+override func menu(for event: NSEvent) -> NSMenu? {
+    let point = convert(event.locationInWindow, from: nil)
+    let row = row(at: point)
+
+    if row >= 0 && !selectedRowIndexes.contains(row) {
+        selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    }
+
+    guard row >= 0, let node = item(atRow: row) as? FileNode else { return nil }
+
+    let menu = NSMenu()
+    menu.addItem(withTitle: "Open", action: #selector(openItem(_:)), keyEquivalent: "")
+    menu.addItem(withTitle: "Reveal in Finder", action: #selector(revealInFinder(_:)), keyEquivalent: "")
+    menu.addItem(NSMenuItem.separator())
+    menu.addItem(withTitle: "Copy Path", action: #selector(copyPath(_:)), keyEquivalent: "")
+    return menu
+}
+```
+
+#### 列宽管理：自动分配 vs 用户手动调整
+
+列宽管理需要解决一个矛盾：窗口缩放时应自动按比例分配列宽，但用户手动拖拽调整后不希望被覆盖。
+
+```swift
+class Coordinator: NSObject {
+    var isApplyingAutoColumnWidths = false   // "当前列宽变化是程序触发的"
+    var hasUserCustomizedColumns = false     // "用户是否手动调整过"
+
+    @objc func columnDidResize(_ notification: Notification) {
+        if !isApplyingAutoColumnWidths {
+            hasUserCustomizedColumns = true
+        }
+    }
+
+    func applyAutoColumnWidths() {
+        guard !hasUserCustomizedColumns else { return }
+        isApplyingAutoColumnWidths = true
+        defer { isApplyingAutoColumnWidths = false }
+
+        let totalWidth = outlineView.bounds.width
+        for (column, ratio) in zip(outlineView.tableColumns, columnRatios) {
+            column.width = totalWidth * ratio
+        }
+    }
+}
+```
+
+| 场景 | 行为 |
+|------|------|
+| 首次打开 | 自动按比例分配 |
+| 窗口缩放（用户未调过列宽） | 自动重新分配 |
+| 窗口缩放（用户已调过列宽） | 保持用户设置不变 |
+| 刷新/切换根目录 | 重置标记，重新自动分配 |
+
+### 4.3 LocalRootFSService — 文件系统服务层
+
+**职责**：封装所有文件系统 I/O 操作，返回纯数据结果，不涉及任何 UI 逻辑。
+
+#### 路径校验
+
+```swift
+enum RootFSError: LocalizedError {
+    case pathEmpty
+    case pathNotFound(String)
+    case pathNotDirectory(String)
+    case accessDenied(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .pathEmpty:
+            return "The rootfs mount path is not configured for this container."
+        case .pathNotFound(let p):
+            return "The path '\(p)' does not exist. The container may not be running."
+        case .pathNotDirectory(let p):
+            return "The path '\(p)' exists but is not a directory."
+        case .accessDenied(let p):
+            return "Access denied to '\(p)'. Check permissions or sandbox settings."
+        }
+    }
+}
+
+func resolveRootURL(path: String) throws -> URL {
+    guard !path.isEmpty else { throw RootFSError.pathEmpty }
+    let url = URL(fileURLWithPath: path)
+    var isDir: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+        throw RootFSError.pathNotFound(path)
+    }
+    guard isDir.boolValue else {
+        throw RootFSError.pathNotDirectory(path)
+    }
+    return url
+}
+```
+
+#### 目录枚举
+
+```swift
+func listDirectory(at url: URL, showHiddenFiles: Bool) throws -> [FileNode] {
+    let resourceKeys: Set<URLResourceKey> = [
+        .isDirectoryKey,
+        .fileSizeKey,
+        .contentModificationDateKey,
+        .isHiddenKey,
+        .localizedTypeDescriptionKey,
+    ]
+
+    // ① 使用 NSFileCoordinator 协调读取
+    var result: [FileNode] = []
+    var coordError: NSError?
+
+    NSFileCoordinator().coordinate(
+        readingItemAt: url,
+        options: .immediatelyAvailableMetadataOnly,
+        error: &coordError
+    ) { accessURL in
+        // ② 批量预取元数据
+        let contents = try? FileManager.default.contentsOfDirectory(
+            at: accessURL,
+            includingPropertiesForKeys: Array(resourceKeys),
+            options: []
+        )
+        result = (contents ?? []).compactMap { buildNode(from: $0, keys: resourceKeys) }
+    }
+
+    if let err = coordError { throw err }
+
+    // ③ 隐藏文件过滤
+    if !showHiddenFiles {
+        result = result.filter { !$0.isHidden }
+    }
+
+    // ④ 排序：目录在前 + 本地化标准排序
+    result.sort { a, b in
+        if a.isDirectory != b.isDirectory { return a.isDirectory }
+        return a.name.localizedStandardCompare(b.name) == .orderedAscending
+    }
+
+    return result
+}
+```
+
+> **NSFileCoordinator 的作用**：macOS 的文件访问协调机制，用于多进程/线程同时访问同一文件时避免冲突。即使本场景只做读取，使用它仍有价值：
+> - 目录可能正被 Spotlight 索引、Time Machine 备份等系统进程写入，协调器确保读取一致性。
+> - `.immediatelyAvailableMetadataOnly` 表示"只读取已缓存的元数据，不触发网络下载"。对网络挂载卷或 iCloud Drive 目录至关重要——避免因枚举目录而意外触发海量文件下载。
+> - 未来增加写操作（重命名/删除）时可无缝升级为读写协调。
+
+> **`includingPropertiesForKeys` 的性能意义**：macOS 文件系统（APFS/HFS+）在枚举目录时可以批量预取指定的元数据属性（一次系统调用）。如果不指定 keys，后续逐个调用 `url.resourceValues(forKeys:)` 每个文件会触发独立 `stat` 系统调用。大目录（数千文件）下性能差异可达数量级。
+
+> **`localizedStandardCompare` 的行为**：Apple 推荐的文件名排序方法，与 Finder 一致：按当前 locale 本地化比较（中文按拼音）；数字自然排序（"file2" 排在 "file10" 前面）；忽略大小写。
+
+> **隐藏文件判断**：使用 `URLResourceKey.isHiddenKey` 比检查 `.` 前缀更准确——macOS 中某些文件通过 BSD flag（`UF_HIDDEN`）标记为隐藏，文件名并不以 `.` 开头。
+
+### 4.4 rootfs 路径解析链
+
+容器的 rootfs 在宿主机上的挂载路径没有统一标准，不同容器运行时各有约定。为最大化兼容性，在 `ContainerViewModel` 中采用多来源逐级 fallback 的推断策略：
+
+```
+优先级 1：显式路径
+    ContainerDetail 模型中已携带 rootfsMountPath 字段
+    │
+    ├─ 非空 → 使用 ✓
+    ▼ 为空 → fallback
+
+优先级 2：容器 Labels
+    读取以下 label keys（按序尝试）：
+    · arcbox.rootfs.mount.path
+    · （可扩展其他约定 key）
+    │
+    ├─ 找到 → 使用 ✓
+    ▼ 未找到 → fallback
+
+优先级 3：Mounts 分析
+    遍历容器 mounts，寻找 destination == "/" 的条目
+    取其 source 作为宿主机路径
+    │
+    ├─ 找到 → 使用 ✓
+    ▼ 未找到 → fallback
+
+优先级 4：OrbStack 平台约定
+    ~/OrbStack/docker/containers/<containerName>
+    │
+    ├─ 路径存在 → 使用 ✓
+    ▼ 不存在 → 放弃，报 pathEmpty 错误
+```
+
+> **为什么需要 OrbStack 兜底**：OrbStack 是 macOS 上轻量级的 Docker 运行环境。与 Docker Desktop 不同，OrbStack 通过 FUSE / VirtioFS 将容器 rootfs 直接映射到宿主机用户目录（`~/OrbStack/docker/containers/`），使得可以直接浏览容器内文件。Docker Desktop 则运行在 Linux VM 中，rootfs 不直接暴露为宿主机目录。
+
+路径解析结果缓存在 `ContainersViewModel` 的详情缓存中，容器列表刷新（polling 或手动）不会清除已缓存的 `rootfsMountPath`，避免用户在 Files Tab 浏览时因后台刷新导致路径丢失、视图重置。
+
+---
+
+## 5. 关键设计决策与原理
+
+### 5.1 三层分离
+
+| 层 | 类型 | 职责 | 依赖 |
+|----|------|------|------|
+| ContainerFilesTab | SwiftUI View (struct) | 状态管理、视图切换 | 仅 SwiftUI |
+| LocalRootFSOutlineView | NSViewRepresentable (struct + Coordinator class) | 渲染、交互 | AppKit |
+| LocalRootFSService | 纯 Swift struct | 文件 I/O | Foundation |
+
+这样的分层使得：
+- **LocalRootFSService** 可独立单元测试（传入临时目录即可）。
+- **LocalRootFSOutlineView** 可在未来替换为其他实现。
+- **ContainerFilesTab** 可嵌入任何 SwiftUI 容器（Tab / Sheet / NavigationDetail）。
+
+### 5.2 Coordinator 为什么是必需的
+
+SwiftUI 的 `NSViewRepresentable` struct 是值类型，每次 body 重算都可能被重新创建。而 `NSOutlineView` 的 delegate/datasource 需要一个稳定的引用类型对象。`Coordinator` 的生命周期由 SwiftUI 管理，与 `NSView` 对齐，是存放以下内容的正确位置：
+
+- 树节点数据（`rootNodes: [FileNode]`）
+- 异步控制状态（`generation`）
+- 列宽管理状态（`hasUserCustomizedColumns`）
+- delegate/datasource 实现
+
+### 5.3 为什么不递归预加载
+
+典型的 Linux 容器 rootfs 包含数万到数十万个文件。递归预加载会导致：启动延迟数秒；每个 `FileNode` 约 200–400 字节，10 万节点 ≈ 20–40 MB；且用户通常只浏览少数目录。懒加载将首屏限制为根目录的直接子项（通常几十到几百个），单层读取时间 1–10ms（SSD），几乎无感。
+
+---
+
+## 6. 性能与并发策略
+
+### 6.1 线程模型
+
+```
+┌──────────────────┐         ┌──────────────────┐
+│    Main Thread   │         │ Background Queue │
+│  (UI 渲染/交互)   │         │  (文件系统 I/O)    │
+├──────────────────┤         ├──────────────────┤
+│ · NSOutlineView  │         │ · listDirectory()│
+│   delegate 回调   │ ──────→ │ · 元数据读取      │
+│ · 用户交互事件     │         │ · 排序 & 过滤     │
+│ · reloadItem()   │ ←────── │                  │
+│ · 状态更新        │         │                  │
+└──────────────────┘         └──────────────────┘
+```
+
+### 6.2 Generation 代际令牌
+
+这是防止异步结果覆盖错误数据的核心机制。当用户切换容器或刷新时，旧的异步读取可能仍在进行中：
+
+```swift
+class Coordinator {
+    private var generation: UInt64 = 0
+
+    func reload(for newRootURL: URL) {
+        generation &+= 1
+        let capturedGen = generation
+        rootNodes.removeAll()
+        outlineView.reloadData()             // 先清空显示
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let items = try? self?.service.listDirectory(at: newRootURL, ...)
+
+            DispatchQueue.main.async {
+                guard let self = self,
+                      self.generation == capturedGen  // ← 过期则丢弃
+                else { return }
+
+                self.rootNodes = items ?? []
+                self.outlineView.reloadData()
+            }
+        }
+    }
+}
+```
+
+**场景演示**：
+
+```
+t=0ms    用户选中容器 A → generation=1, 开始加载 A 的 rootfs
+t=200ms  用户切换到容器 B → generation=2, 清空 UI, 开始加载 B
+t=350ms  B 加载完成, capturedGen=2 == generation=2 ✅ → 渲染 B
+t=500ms  A 加载完成, capturedGen=1 != generation=2 ❌ → 丢弃
+```
+
+> **`&+=` 运算符**：Swift 中 `&+` 是溢出加法。普通 `+` 在 `UInt64` 溢出时触发运行时 crash（Swift 默认行为），`&+` 则安静回绕到 0。虽然 `UInt64` 最大值约 1.8×10¹⁹，实际不可能溢出，但使用 `&+=` 是防御性编程习惯。
+
+### 6.3 先清空再加载
+
+```swift
+rootNodes.removeAll()
+outlineView.reloadData()     // 立即清空界面
+// ... 然后异步加载新数据
+```
+
+确保切换瞬间不会出现"新容器标题 + 旧容器文件列表"的视觉不一致。
+
+---
+
+## 7. 状态机与错误处理
+
+### 7.1 视图状态机
+
+```
+                    ┌──────────┐
+                    │  初始化   │
+                    └────┬─────┘
+                         │ onAppear / 容器变更
+                         ▼
+                  ┌──────────────┐
+           ┌──────│   加载中      │──────┐
+           │      └──────────────┘      │
+           │ 成功                        │ 失败
+           ▼                            ▼
+    ┌──────────────┐           ┌──────────────┐
+    │   正常显示    │           │   错误态      │
+    │ (文件树可用)   │           │ (分类错误文案 │
+    │              │           │  + 刷新按钮)  │
+    └──────┬───────┘           └──────┬───────┘
+           │ 用户点刷新                 │ 用户点刷新
+           └───────────┐    ┌─────────┘
+                       ▼    ▼
+                  ┌──────────────┐
+                  │   加载中      │
+                  └──────────────┘
+```
+
+### 7.2 路径缺失特殊状态
+
+当容器的 rootfs 路径无法通过任何来源推断时，Files Tab 显示专门的"路径缺失"提示（`pathEmpty` 错误），而非通用的错误信息。这帮助用户理解问题出在"配置/环境"而非"程序错误"。
+
+### 7.3 分类型错误反馈
+
+| 错误类型 | 文案示例 | 用户行动 |
+|---------|---------|---------|
+| `pathEmpty` | "未配置 rootfs 挂载路径" | 检查容器配置或运行环境 |
+| `pathNotFound` | "路径 '/xxx' 不存在，容器可能未运行" | 启动容器后刷新 |
+| `pathNotDirectory` | "'/xxx' 不是目录" | 检查路径是否正确 |
+| `accessDenied` | "无权限访问 '/xxx'" | 检查权限或沙盒设置 |
+
+---
+
+## 8. 遇到的问题与解决方案
+
+### 问题 1：rootfs 路径来源不稳定（不同运行环境、不同数据源字段差异）
+
+**现象**：并非所有容器都提供统一字段；有的在 labels，有的在 mounts，有的只能按平台约定推断。
+
+**根因**：容器运行时（container runtime）与容器编排工具在宿主机上暴露 rootfs 的方式各不相同，且这一信息不属于 OCI 容器标准的一部分。
+
+**解决**：在 `ContainerViewModel.inferRootFSMountPath` 建立多来源推断链（显式路径 → Labels → Mounts → OrbStack 约定），并加入平台路径兜底。
+
+**结果**：路径解析命中率显著提高，减少"Files Tab 空白/不可用"场景。
+
+### 问题 2：目录读取可能导致主线程卡顿或出现异步回写错位
+
+**现象**：直接主线程读取目录会影响交互响应；切换容器/刷新过程中，旧异步任务可能覆盖新状态。
+
+**解决**：
+- 目录读取放后台队列（`DispatchQueue.global(qos: .userInitiated)`）。
+- 通过 `generation` 代际令牌做异步结果有效性校验（见 6.2 节）。
+- 切换时先清空并重载，避免旧状态残留（见 6.3 节）。
+
+**结果**：交互流畅度和数据一致性都提升。
+
+### 问题 3：列宽自动布局与用户手动调整存在冲突
+
+**现象**：窗口尺寸变化时需要自动调列宽，但用户手调后又不希望被系统覆盖。
+
+**解决**：
+- 区分"程序调整"和"用户调整"（`isApplyingAutoColumnWidths` + 通知判断）。
+- 用户调整后设置 `hasUserCustomizedColumns`，后续非强制场景不再自动改写。
+
+**结果**：兼顾了开箱可用与可控性，行为接近原生 Finder 表格体验。
+
+### 问题 4：错误反馈不明确导致排障成本高
+
+**现象**：路径缺失、路径不存在、不是目录等失败场景如果统一报错，用户难以定位原因。
+
+**解决**：`LocalRootFSService.RootFSError` 提供分类型错误文案（见 7.3 节）；Files Tab 提供明确错误态与刷新入口。
+
+**结果**：失败场景更可诊断，用户可自行恢复或进一步定位配置问题。
+
+---
+
+## 9. 后续优化方向
+
+### 短期
+
+| 方向         | 说明                            |
+| ---------- | ----------------------------- |
+| 权限/软链接异常提示 | sandbox 限制、符号链接循环或断链时提供更细粒度文案 |
+| 文件搜索       | 工具栏搜索框，过滤已加载节点                |
+| 列排序        | 点击列头切换排序（名称/大小/日期/类型）         |
+
+### 中期
+
+| 方向 | 说明 |
+|------|------|
+| 文件操作能力 | 重命名、删除、新建目录、拖拽（需引入写协调 + Undo） |
+| 列宽持久化 | 将列宽偏好存入 `UserDefaults`，跨会话保持 |
+| 大目录监控指标 | 节点数、加载时延、内存占用等性能指标 |
+
+### 长期
+
+| 方向 | 说明 |
+|------|------|
+| 更多运行时支持 | 在路径解析链中补充 Colima、Rancher Desktop、Podman Desktop 等约定 |
+| 远程文件浏览 | 通过 Docker API / exec + tar 实现非本地容器的文件浏览 |
+| FSEvents 增量刷新 | 通过 `DispatchSource` 监听目录变化，自动刷新受影响节点 |****
