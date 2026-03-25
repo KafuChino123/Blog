@@ -1,0 +1,187 @@
+# Swift Actor
+
+Https://www.hackingwithswift.com/quick-start/concurrency/what-is-an-actor-and-why-does-swift-have-them
+
+Swift introduced **Actor** in 5.5. This is a new concurrent programming model tool designed to solve possible data race problems in multi-threaded environments. Actor encapsulates shared, variable states and ensures thread-safe access to their states, which helps developers free them from tedious lock management.
+
+---
+
+### **1. What is Actor? **
+
+Actor is a Reference Type, which is similar to Class, but different from classes, Actor has its own thread security.
+
+Through a mechanism called **Actor Isolation**, it ensures that the internal state (attributes, etc.) can only be modified or read by one task (such as function call or attribute access) in a multi-threaded environment, thus eliminating the data competition problem caused by concurrent access.
+
+At the same time, Actor uses a **task queue**. All operations for Actor will be added to its internal task queue and processed sequentially. Therefore, even if multiple concurrent tasks try to access the same Actor, only one task will be executed, and other tasks need to be queued in order.
+
+---
+
+### **2. Why do you need Actor? **
+
+Concurrent programming in Swift may face serious "data competition" problems in a multi-threaded environment:
+
+- When multiple threads access (especially modify) certain shared resources at the same time, it may lead to unexpected behavior (such as partial data being overwritten or lost).
+
+- In order to prevent this problem, the traditional practice is to use thread locks (such as `DispatchQueue`, `NSLock`, etc.) to manually manage the access order, but this will lead to complex code, difficult to maintain, and may even introduce errors such as deadlock.
+
+**The appearance of Actor solves this problem:**
+
+- Automatically ensure thread security and avoid the complexity of manual locking.
+
+- Prevent multiple threaded concurrent access to the same state through the "asynchronous access" + "sequential task scheduling" mechanism.
+
+---
+
+### **3. Characteristics of Actor**
+
+#### **(1) Thread Safety**
+
+- The internal state of Actor is thread-safe by default, and the state can only be accessed or modified through the method provided by Actor itself.
+
+- Actor's built-in thread isolation mechanism ensures that the status is updated safely without manual write locks.
+
+#### **(2) Task serialization**
+
+- Actor automatically serializes the execution of tasks internally. Even if there are multiple threads calling Actor's functions or operating their attributes, these tasks will be executed one after another in order.
+
+- This serialized task scheduling mechanism is the core of Actor's internal thread security.
+
+#### **(3) Async Access**
+
+- When interacting with Actor, most operations need to use `await` (i.e. asynchronous access) to ensure that the operation tasks are processed serially.
+
+- Actor's method is asynchronous by default. Although this asynchronous access may seem a little complicated, it comes with thread-safe code.
+
+#### **(4) Similar to the class, but safer**
+
+- Defining Actor is similar to defining classes. You only need to use the keyword `actor` to replace `class`.
+
+- Actor provides thread security and concurrency protection, but supports inheritance and reference counting (ARC) like classes.
+
+---
+
+###**4. Applicable scenes of Actor**
+
+Actor is very suitable for use in a soncurrent environment, especially in the following situations:
+
+- **Protection of shared resources**: Actor can ensure secure access to shared resources (such as counters, caches, data storage, etc.) by multiple threads.
+
+- **High Concurrency Task Scheduling**: When There Are Complex Asynchronous Operations In The Program, Actor Provides A More Elegant Concurrency Model.
+
+- **Programs that require an asynchronous interface**: When you are using Swift's new `async/await` feature, Actor can collaborate seamlessly and simplify asynchronous task management.
+
+- **Projects with strict thread security requirements**: Through Actor, you can ensure that the status is modified by only one thread at any time, eliminating data competition.
+
+---
+
+### **5. How to define and use Actor**
+
+The definition and use of Actor is similar to a class. You can create an Actor by using the keyword `actor`.
+
+The following is a simple example:
+
+````swift
+
+Actor Counter {
+
+Private var value = 0
+
+Func increment(){
+
+Value += 1
+
+}
+
+Func getValue() -> Int {
+
+Value
+
+}
+
+}
+
+// Example of asynchronous call of Actor
+
+Let counter=counter()
+
+Task {
+
+Await counter.increment()
+
+Print(await counter.getValue())
+
+}
+
+```
+
+#### **Code interpretation**:
+
+1. `actor Counter`: Declare an Actor named `Counter` through `actor` to record the value of the counter.
+
+2. `private var value = 0`: The private attribute `value` is encapsulated in Actor, which is thread-safe.
+
+3. `increment` and `getValue` methods: provide thread-safe interface operation `value`.
+
+4. External call: Use `await` to call the method of Actor asynchronously to ensure thread security and task serialization.
+
+---
+
+###**6. The advantages of Actor**
+
+1. **Built-in thread security**: Actor has its own thread isolation and task serialization, and there is no need to manually use locks or queues, which greatly reduces the complexity of writing synchronous code.
+
+2. **Simplified concurrency model**: Through async/await, Task and other new features combined with Actor, concurrent tasks can be managed in a more intuitive way.
+
+3. **Prevent data competition**: The access to the actor's internal state is exclusive, and only one task can be operated at the same time to eliminate data competition from the source.
+
+4. **Enhanced code readability and security**: Actor's features allow developers to focus on business logic without having to worry about the concurrency mechanism.
+
+---
+
+###**7. Actor's limitation (limitation)**
+
+1. **Default asynchronous access**
+
+- Actor's methods or attributes need to be accessed or called using `await`, which may increase the complexity of code writing and calling.
+
+2. **Potential performance expenses**
+
+- In order to achieve thread security, Actor has internal task queues and scheduling mechanisms, which will have additional performance overhead compared with ordinary classes.
+
+- If there is no need for concurrent tasks, it may be more efficient to use ordinary classes directly.
+
+3. **Compatibility issues**
+
+- Migrating existing classes to Actor may require more code adjustments.
+
+4. **Actor's thread security is limited**
+
+- Actor only provides thread security protection for its own internal state. If other global variables are still shared in a multi-threaded environment, additional protection measures are still needed.
+
+---
+
+### **8. Actor's role in Swift's parallel model**
+
+Actor is an important component of Swift's concurrency model, working with **async/await** and **Task**. By providing a simple and intuitive thread security method, it solves the complexity of traditional locks and queues, allowing developers to implement concurrent programming in a more efficient and safer way.
+
+---
+
+### **Summary**
+
+The introduction of Actor redefines Swift's concurrent programming specification, which is a tool that focuses on thread security and efficient development. Through the built-in task serialization and thread isolation mechanism, it greatly reduces the complexity of writing concurrent code and eliminates the problem of data competition. It is an ideal choice for managing shared resources or handling asynchronous tasks in a concurrent environment. However, it requires asynchronous call and has a certain performance overhead, so its applicability needs to be weighed according to specific scenarios when using it.
+
+### What is Reentrant (re-enterable)
+
+"Reentrant" is a term commonly used in the field of computer science and programming, especially in multi-threaded programming and concurrent programming. Its basic meaning is that a function or program can be interrupted and safely re-entered without affecting its execution results.
+
+Specifically, the reentrant function has the following characteristics:
+
+1. **Stateless**: reentrant functions will not rely on any static or global variables, or if they must rely on these variables, their access must be thread-safe. This means that each call of this function is independent.
+
+2. **No side effects**: The function will not change the external state or variable when executed. This means that calling this function in a multi-threaded environment will not affect the execution of other threads.
+
+3. **Re-enterable**: If a thread is interrupted while executing this function (for example, context switching occurs), and then another thread calls the same function, the call of the second thread will not affect the execution of the first thread.
+
+For example, a simple mathematical calculation function (such as calculating squares) is usually reentrant because it only relies on input parameters and does not change the global state. However, if a function maintains a global counter and modifies it every time it is called, then the function is non-reentrant, because multiple threads may try to modify this shared state at the same time, resulting in unpredictable behavior.
+
+When designing concurrent programs, using the reentrant function is an important consideration, which can help avoid data competition and other concurrency-related problems.
