@@ -1,0 +1,219 @@
+# List or LazyVStack: Inert container selection in SwiftUI
+
+> Based on [fatbobman.com](https://fatbobman.com/zh/posts/list-or-lazyvstack/) blog post arrangement
+
+---
+
+## I. Overview
+
+`List` and `LazyVStack` (usually combined with `ScrollView` + `ForEach`) are the two core inert containers in SwiftUI. They perform similarly in some scenarios, but the underlying architecture, design philosophy and applicable scenarios are different. This article conducts a comparative analysis from six dimensions.
+
+> **Note:** Most of the features of `LazyVStack` in this article are also applicable to `LazyHStack` and other `Lazy` series containers.
+
+---
+
+## II. Bottom Realization: Different Origins
+
+| Dimension | List | LazyVStack |
+
+|-----|-----|------------|
+
+| **Debut** | SwiftUI 1.0 (first version) | SwiftUI 2.0 (second year) |
+
+| **Underlying Technology** | UIKit/AppKit Encapsulation | SwiftUI Native Implementation |
+
+| **iOS 13–15** | Based on `UITableView` | — |
+
+| **iOS 16+** | Based on `UICollectionView` | — |
+
+| **UIKit Dependence** | ✅ Dependent | ❌ Not Dependent |
+
+This fundamental difference in realization is the root cause of the difference between the two in terms of performance, function, customization flexibility and layout logic.
+
+---
+
+## III. Stylization and preset functions
+
+### 3.1 LazyVStack — Simple and flexible
+
+- Similar to `VStack`, focusing on **pure layout** function
+
+- Strictly follow the layout rules and will not automatically add additional styles.
+
+- Like a blank sheet of paper, it provides unlimited possibilities for developers' creativity.
+
+### 3.2 List — Rich in functions
+
+- It is not only a container, but also a **feature-rich UI component**
+
+- You can easily switch a variety of preset visual templates through `listStyle`
+
+- Provide a series of **unique interaction capabilities**:
+
+- **SwipeActions** (`swipeActions`): Exclusive to `List` subview
+
+- **`onDelete` / `onMove`**: These two functions of `ForEach` are only effective in `List`
+
+- **Editing mode**: Built-in support for gesture-based project rearrangeming, unique in SwiftUI
+
+- Rich construction methods, deep integration with `ForEach` and data binding
+
+### 3.3 Limitations of List
+
+- As of iOS 18, Apple has not yet opened the **fully customized** ability of `List` style.
+
+- Rich preset templates but limited freedom
+
+> ** Summary positioning: ** `List` = a multi-functional container with default style and behavior; `LazyVStack` = a pure and flexible layout tool.
+
+---
+
+## IV. Layout and customization
+
+### 4.1 Size characteristics of LazyVStack
+
+- When the height of the sub-view is not specified, the **ideal size** of the sub-view is used.
+
+- For example, `Rectangle()` is only displayed as height 10 in `LazyVStack` (Shape defaults to ideal size) instead of filling the space.
+
+- This is consistent with the layout of `ScrollView` in the scrollable direction.
+
+- It provides great freedom and can restore the design style more accurately.
+
+### 4.2 Layout constraints of List
+
+- The presentation is affected by **multi-faceted factors**: selected style, container environment, operating platform
+
+- Style adjustment mainly depends on the **special view modifier** provided by Apple
+
+- In early SwiftUI versions, complex layouts may be difficult to achieve.
+
+### 4.3 Animation restrictions of List
+
+- **Dynamic change of row height** There are limitations, and the animation effect is not ideal (for example, an abnormality will occur when switching line height through Toggle)
+
+- Restrictions on the **transfer animation type** of the sub-view (line)
+
+- Scenes that require special animation and transition effects, `LazyVStack` can provide better performance
+
+---
+
+## V. Collaboration with other containers: context perception
+
+### 5.1 Context-aware advantages of List
+
+SwiftUI has an undisclosed mechanism - **context perception ability**. The official container can intelligently perceive the environment and automatically adjust the style.
+
+Outstanding performance of `List` and navigation container:
+
+1. Support **sidebar** and other special display modes
+
+2. The navigation container provides excellent support for **data sources and row labels** bound by `List`
+
+3. Some components (such as `NavigationLink`) present **unique style** in `List`
+
+### 5.2 Contextual challenges
+
+- By default, `List` only responds to **one `Button`** operation in the row view (can be solved by adjusting `buttonStyle`)
+
+- It is difficult to control the `NavigationLink` style in the early version.
+
+> **Conclusion:** When it is necessary to be consistent with the system style and make full use of the automatic perception ability, `List` is a better choice, and the cross-platform code reuse rate is higher.
+
+---
+
+## VI. Scroll control
+
+| Dimension | List | LazyVStack + ScrollView |
+
+|-------|-------|-------------------------|
+
+| **Official Rolling API** | Only `ScrollViewReader` | Significantly enhanced from iOS 17, supporting rich new APIs |
+
+| **Avariable solution** | Access the underlying UIKit API through third-party libraries (such as SwiftUI-Introspect) | Native support |
+
+| **Precise rolling control** | Weaker | ✅ better |
+
+| **Location-based visual effects** | Difficult to achieve | ✅ More flexible |
+
+> **Conclusion:** Since iOS 17, the ability and convenience of `ScrollView` + `LazyVStack` in rolling control has far exceeded `List`.
+
+---
+
+## VII. Performance comparison
+
+### 7.1 Performance characteristics of LazyVStack
+
+- Maintain a **complete container height** (sum of sub-view heights + spacing)
+
+- Use **dynamic estimation height** to achieve inertial loading
+
+- **Question 1: ** When scrolling quickly to a specific position, you need to instantiate and calculate the height of **all subviews** before that position, which may lead to performance degradation.
+
+- **Question 2:** When the height difference of the sub-view is large, fast scrolling or large jumps may occur **white screen phenomenon**
+
+### Performance characteristics of 7.2 List
+
+- At the SwiftUI level **not maintained** the height of the complete content
+
+- When scrolling/jumping quickly, **smart selection** necessary subviews for instantiation and calculation
+
+- The efficiency of scrolling and jumping is significantly higher
+
+### 7.3 Notes
+
+- Using the `id` modifier in `List` may cause the subview ** to lose the lazy loading ability** (`LazyVStack` has no problem)
+
+- It is recommended that the data type follow the `Identifiable` and `Hashable` protocols at the same time.
+
+- Avoid using the `id` modifier as a positioning label for scrolling control
+
+> **Conclusion:** Under the same amount of data, `List` usually shows **higher efficiency** than `LazyVStack`.
+
+---
+
+## VIII. Select decision-making quick check table
+
+| Considerations | Tendency List ✅ | Tendency LazyVStack ✅ |
+
+|--------|------------|--------------------|
+
+| Need to slide operation / edit mode | ✅ | |
+
+| System style consistency is required | ✅ | |
+
+| Deep integration with navigation container | ✅ | |
+
+| Cross-platform compatibility | ✅ | |
+
+| Big data set rolling/jump performance | ✅ | |
+
+| Highly customized UI design | | ✅ |
+
+| Precise scrolling control (iOS 17+) | | ✅ |
+
+| Complex animation and transition effects | | ✅ |
+
+| Dynamic changes of line height | | ✅ |
+
+| Maximum layout flexibility | | ✅ |
+
+---
+
+## IX. Summary
+
+There is no one-size-fits-all solution. The best choice depends on the specific project needs:
+
+1. **Performance** - Scenes with large-scale jumps and sub-view height differences need to be focused on
+
+2. **Rolling control** - accuracy and position perception ability
+
+3. **Layout flexibility** - Complex UI design adaptability, animation compatibility
+
+4. **Preset function** - Do you need the built-in features of the system?
+
+Five. **Cross-platform compatibility** - Performance in different Apple ecosystems
+
+6. **Component Collaboration** - Needs for Navigation and Data Binding
+
+In practice, the two can be used on different pages to give full play to their respective strengths. The key is to choose flexibly according to the needs of the application. With the continuous evolution of SwiftUI, the capabilities and applicable scenarios of these components will also change.
