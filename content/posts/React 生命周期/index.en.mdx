@@ -1,0 +1,83 @@
+# React life cycle
+
+React life cycle means that React will automatically call a series of methods in the process of a component from creation to destruction. The life cycle method can be divided into three main stages: **Mounting**, **Updating**, **Unmounting**.
+
+### 1. Mounting stage (Mounting)
+
+When a component is created and inserted into DOM, the following life cycle methods will be called in turn:
+
+- **`constructor***
+
+Constructor, initialize the state and binding method of the component. It is usually used to set the state or bind the event processing function.
+
+- **`static getDerivedStateFromProps`**
+
+Call before each rendering, accept the current `props` and `state`, and return an object to update `state`. This is a static method without `this`.
+
+> It is usually used to update `state` from `props`, but in most cases it should be avoided because it overlaps with `shouldComponentUpdate`.
+
+- **`render`**
+
+The function that must be implemented returns the UI of the component, and React will update the DOM according to the return value of `render`.
+
+- **`componentDidMount`**
+
+The component is called after being rendered to DOM. It is suitable for sending requests, adding event listeners, starting timers and other side effects.
+
+### two Update stage (Updating)
+
+When the `props` or `state` of the component changes, React will re-render the component. The life cycle methods of the update stage include:
+
+- **`static getDerivedStateFromProps`**
+
+At the same mounting stage, this method will be called when `props` or `state` changes.
+
+- **`shouldComponentUpdate****
+
+It is called when the `props` or `state` of the component changes to determine whether the component needs to be re-rendered. Return `true` by default, and return `false` to avoid unnecessary rendering.
+
+> Use this method to optimize performance and avoid unnecessary rendering.
+
+- **`render`**
+
+Like the mounting stage, the `render` method will be called to update the UI of the component.
+
+- **`getSnapshotBeforeUpdate`**
+
+Call before the latest rendering output is submitted to DOM. Its return value will be passed to `componentDidUpdate` as a third parameter, which is usually used to obtain information before the DOM update.
+
+- **`componentDidUpdate****
+
+Called after the updated rendering result is submitted to DOM. It accepts `props` and `state` before and after, which are suitable for scenarios that require side effects (such as requesting data) according to the update.
+
+### three. Unmounting stage (Unmounting)
+
+Called when the component is removed from the DOM:
+
+- **`componentWillUnmount`**
+
+Called before the component is unloaded from DOM, it is suitable for cleaning up work, such as clearing timers, canceling network requests, removing event listening, etc.
+
+### 4. Error Handling (Error Boundaries)
+
+When an error occurs in the subcomponent, React provides an error boundary to capture the error and display the alternate UI:
+
+- **`static getDerivedStateFromError****
+
+This method will be called when an error is captured to return a new `state` to update the UI.
+
+- **`componentDidCatch****
+
+Detailed information used to handle errors can be used to record error logs or display alternate UI.
+
+### React 16.3+'s new life cycle method
+
+React 16.3 introduces some new life cycle methods and abandons `componentWillMount`, `componentWillReceiveProps` and `componentWillUpdate`, because these methods will cause some problems in asynchronous rendering. The new methods include:
+
+- **`getDerivedStateFromProps****
+
+Replacing `componentWillReceiveProps` allows React to check `props` and `state` before each rendering and decide whether to update `state`.
+
+- **`getSnapshotBeforeUpdate`**
+
+Called before `componentDidUpdate`, allowing components to obtain some DOM information after rendering, which is suitable for scenarios such as scrolling position.
