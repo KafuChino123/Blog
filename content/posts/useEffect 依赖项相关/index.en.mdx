@@ -1,0 +1,25 @@
+# UseEffect dependencies related
+
+1. **`useEffect(() => { /* Code */ }, []);`(empty dependency array)**
+
+- **Execution timing**: Only execute once when the component is mounted.
+
+- **Applicable scenario**: Use an empty dependency array when you only need to perform an operation when the component is loaded (such as data loading, event listening, etc.) and do not want to be repeated in subsequent updates.
+
+- **Reason**: An empty dependency array means that there is no "dependency", so `useEffect` will not be re-executed due to any changes.
+
+2. **`useEffect(() => { /* Code */ });`(no dependency array)**
+
+- **Execution timing**: Execution every time the component is updated.
+
+- **Applicable scenario**: When you want a side effect to be executed every time a component is updated (for example, when a dependency state or props changes), use `useEffect` without dependencies.
+
+- **Reason**: No dependent array means that `useEffect` will be called every time it is rendered.
+
+3. **`useEffect(() => { /* Code */ }, [dependency]);`(There is an item in the dependency array)**
+
+- **Execution timing**: Execute when the dependency changes.
+
+- **Applicable scenario**: When you want a side effect to be executed only when a specific dependency (such as status, props) changes, use the items in the dependency array.
+
+- **Reason**: When the dependency changes, `useEffect` will be re-executed.
