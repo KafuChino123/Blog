@@ -1,0 +1,291 @@
+# 在 macOS 原生应用中实现 OIDC 登录：从协议到落地
+
+最近我在一个 macOS 桌面应用里从零实现了完整的 OIDC 登录：Authorization Code + PKCE、系统浏览器授权、Keychain 持久化、token 惰性刷新与轮换、userinfo 用户资料——全程没有引入任何第三方认证库，只用 Apple 平台自带的组件。本文把这段实现整理成一份通用的工程指南：协议背景、设计决策及其理由、端到端流程、踩过的构建系统与调试陷阱，以及一份可以直接照着做的检查清单。
+
+文中的架构和代码结构来自真实项目，但所有标识符都已泛化：应用的 URL scheme 记作 `com.example.app`，签发方记作 `https://auth.example.com`，认证包记作 `AuthKit`。
+
+---
+
+## 1. 要实现什么
+
+**目标：** 让用户在桌面应用里登录你的平台账号，跨应用重启保持登录状态，并按需向应用内任何 API 客户端提供有效的 Bearer token。
+
+**最终形态：** 通过系统浏览器完成 Authorization Code + PKCE 流程，token 持久化在 Keychain 中，惰性刷新并支持 refresh token 轮换（rotation），通过 userinfo 端点获取用户资料（昵称、邮箱、头像），登录状态以一个可观察对象的形式驱动所有 UI。
+
+---
+
+## 2. 协议背景
+
+### 2.0 术语速查
+
+| 术语 | 含义 |
+| --- | --- |
+| **OP / IdP**（OpenID Provider / Identity Provider） | 负责认证用户并签发 token 的服务端，即「登录服务器」 |
+| **RP**（Relying Party） | 依赖 IdP 完成登录的应用——本文中的桌面应用 |
+| **Claim** | token 或 userinfo 中关于用户的一条断言，如 `sub`（用户 ID）、`email` |
+| **Scope** | 客户端申请的权限范围，决定能拿到哪些 claims，如 `openid profile email` |
+| **公共客户端**（public client） | 无法保守秘密的客户端（原生应用、SPA）；与之相对，**机密客户端**能在服务端保存 client secret |
+
+一句话区分两个协议：OAuth 2.0 解决**授权**（「这个应用能替用户做什么」），OIDC 在其上加了一层**认证**（「当前用户是谁」）——OIDC 复用 OAuth 的全部流程，额外引入 ID token 和 userinfo 端点来承载身份信息。
+
+### 2.1 选择哪种 OAuth 流程，为什么
+
+对**原生桌面应用**而言，正确的流程是：
+
+**Authorization Code + PKCE，经由系统浏览器，不使用 client secret。**
+
+依据来自《OAuth 2.0 for Native Apps》（RFC 8252，Best Current Practice）：
+
+- 原生应用是**公共客户端**：编译进二进制的任何东西都可以被提取，因此 client secret 不提供任何安全性，也不应使用。
+- 登录必须发生在**外部用户代理**（浏览器）中，而不是内嵌 WebView。应用永远接触不到用户密码，浏览器已有的会话 / SSO / passkey 都能复用，IdP 也能信任该上下文。
+- 由于没有 secret，仅凭授权码就等于持有凭证，可被截获盗用——**PKCE**（RFC 7636）正是为堵住这个洞（见 §2.2）。
+- 回调用**私有 URI scheme**（或声明式的 HTTPS universal link）返回应用；scheme 应向操作系统注册，并在 IdP 侧登记。
+
+各种历史替代方案在此场景下都是错的：implicit 流程会在 URL 中泄漏 token，已被废弃；密码模式让应用直接拿到用户密码；device-code 流程面向输入受限设备。值得一提的是，这些实践正在被吸纳进 OAuth 2.1 草案：PKCE 对所有客户端成为强制要求，implicit 和密码模式被直接移除——按本文方式实现，就已经站在协议演进的方向上。
+
+### 2.2 每次登录尝试的三个随机值
+
+每次登录尝试都会生成三个相互独立的随机值，各自防御一类攻击：
+
+| 值 | 传输路径 | 校验方 | 防御的攻击 |
+| --- | --- | --- | --- |
+| **PKCE verifier / challenge** | challenge（`base64url(SHA256(verifier))`）放进 authorize URL；原始 verifier 只在最后直接发给 token 端点 | IdP 在换码时校验 | **授权码截获**：偷到授权码也拿不出 verifier，码本身毫无用处（RFC 7636，S256） |
+| **state** | 随 authorize URL 进浏览器，随回调原样返回 | 客户端在回调时校验 | **CSRF / 回调注入**：`state` 与当前登录尝试不匹配的回调一律拒绝 |
+| **nonce** | authorize URL → 由 IdP 写入 ID token | 客户端在换码后校验 | **ID token 重放**：把签发的 ID token 绑定到这一次尝试 |
+
+### 2.3 发现文档（Discovery）
+
+只有签发方 URL 需要配置。其余一切——authorization、token、userinfo、revocation 端点及支持的算法——都来自 `{issuer}/.well-known/openid-configuration` 的发现文档（OIDC Discovery 1.0）。这让配置面收敛到两个值，IdP 也可以自由演进端点。
+
+### 2.4 三种 token
+
+| Token | 用途 | 典型生命周期 | 使用位置 |
+| --- | --- | --- | --- |
+| **Access token** | 调用 API 的 Bearer 凭证（常见形态是可用 IdP 的 JWKS 验签的 JWT） | 短（如 3600 秒） | 平台调用与 userinfo 的 `Authorization: Bearer …` |
+| **Refresh token** | 免重新登录换取新 access token（`offline_access` scope） | 长期有效，很多 IdP **每次使用即轮换** | 仅 token 端点 |
+| **ID token** | 带用户声明（claims）的登录证明，有签名 | 单次交换 | nonce 校验 + 最低限度的展示兜底 |
+
+---
+
+## 3. 设计决策
+
+以下是实现前做出的关键取舍及理由：
+
+1. **手写实现，不用 AppAuth。** 事实标准库 AppAuth-iOS 存在未修复的 Swift 6 macOS 崩溃（issue #881），且项目约定尽量不引入第三方依赖。Apple 平台自带的组件——`WebAuthenticationSession`（`ASWebAuthenticationSession` 的 SwiftUI async 封装）、CryptoKit 的 SHA-256、`SecRandomCopyBytes`、URLSession、Keychain——已覆盖全部需求；其上的协议代码量不大且完全可测。async web-auth API 要求 macOS 15 起。
+2. **只有两个配置值**（`OIDC_ISSUER_URL`、`OIDC_CLIENT_ID`），经 gitignore 的 `Local.xcconfig` → Info.plist 注入（见 §7）。其余端点全部来自发现文档。
+3. **重定向 URI 与 scope 编译进常量。** `com.example.app:/oauth2redirect` 和 `openid profile email offline_access` 是「关于这个应用的事实」，已在 IdP 侧登记，不应随环境变化，因此作为常量。改动重定向 URI 需要服务端协同重新注册：一扇「软性单向门」。
+4. **未配置时使用惰性占位符。** 没有配置签发方时，配置回退到 `https://auth.example.invalid`——`.invalid` 是 RFC 2606 保留 TLD，登录会快速、明确地失败，而不是打到某个真实主机上。
+5. **面向测试的协议接缝。** `OIDCProviding`（网络）与 `TokenStoring`（持久化）是协议，测试中用 fake 实现；消费方只依赖 `AccessTokenProviding` 这一接缝。`beginAuthorization()` / `completeSignIn(...)` 从 `signIn(using:)` 中拆出，因为 `WebAuthenticationSession` 在测试里无法构造。
+6. **本地开发 IdP 方案。** 开源的 Dex 可作为替身，配一个静态公共客户端即可；注意 Dex 会拒绝未显式列出的自定义 scheme 重定向 URI，形如：
+
+```yaml
+staticClients:
+  - id: example-desktop
+    name: Example Desktop
+    public: true
+    redirectURIs:
+      - com.example.app:/oauth2redirect
+```
+
+---
+
+## 4. 模块结构
+
+协议层的一切都放在独立的 SwiftPM 包（记作 `AuthKit`）中：
+
+```text
+AuthKit/
+├── Configuration/OIDCClientConfiguration.swift   # 从 Info.plist 读 issuer/clientID；重定向 URI、scope、占位符
+├── PKCE/PKCE.swift                               # CSPRNG 随机值 + S256 challenge（CryptoKit）
+├── Protocol/
+│   ├── OIDCClient.swift                          # OIDCProviding 的 URLSession 实现
+│   ├── OIDCProviding.swift                       # discover / exchangeCode / refresh / revoke / userInfo
+│   ├── OIDCEndpoints.swift                       # 解码后的发现文档
+│   ├── OIDCAuthorizationURLBuilder.swift         # 构造 authorize URL
+│   ├── TokenResponse.swift, IDTokenClaims.swift, OIDCUserInfo.swift, OIDCError.swift
+├── Session/
+│   ├── AuthSession.swift                         # @Observable @MainActor 状态机；恢复、刷新、登出
+│   ├── AuthSession+SignIn.swift                  # 浏览器环节、深链接回调、换码
+│   ├── AuthStatus.swift, AccessTokenProviding.swift
+├── Storage/
+│   ├── KeychainTokenStore.swift                  # 单条原子 generic-password 条目
+│   └── StoredTokens.swift, TokenStoring.swift, KeychainError.swift
+└── Support/Base64URL.swift
+```
+
+应用侧只有薄薄一层集成：App 入口创建 `AuthSession` 并注入 SwiftUI 环境、深链接路由，加上账户设置页等 UI。
+
+实际的实现顺序也值得参考，每一步都可独立提交、独立验证：
+
+1. 搭建包骨架：配置、PKCE、协议类型；
+2. OIDC 网络客户端 + Keychain token 存储；
+3. `AuthSession` 编排 + `AccessTokenProviding` 接缝；
+4. 接入应用，配置经 xcconfig 注入；
+5. 一个能点「登录 / 登出」的最小设置页，用于端到端验证；
+6. 修复配置交付（Info.plist 陷阱，见 §7）；
+7. 补全深链接 OAuth 回调（见 §5 第 4b 步）；
+8. 从 userinfo 端点填充用户身份（见 §6）；
+9. 账户 UI 打磨。
+
+---
+
+## 5. 登录全流程
+
+```text
+AuthSession                      System browser          IdP (auth.example.com)         Keychain
+     │                                  │                           │                       │
+     ├────── 1. GET {issuer}/.well-known/openid-configuration ──────▶                       │
+     ◀───────────── endpoints (cached for this launch) ─────────────┤                       │
+     │                                  │                           │                       │
+     │ 2. generate PKCE verifier + S256 challenge, state, nonce     │                       │
+     │    → record pendingAuthorization │                           │                       │
+     │                                  │                           │                       │
+     ├───── 3. open authorize URL ──────▶                           │                       │
+     │                                  │ user signs in (password / SSO / passkey)          │
+     │                                  ├────── authenticate ───────▶                       │
+     │                                  ◀──── 302 …?code&state ─────┤                       │
+     │                                  │                           │                       │
+     │ 4. the callback URL arrives by one of two paths:             │                       │
+     ◀─── 4a. authenticate() result ────┤                           │                       │
+     ◀─ 4b. Launch Services deep link ──┤                           │                       │
+     │    (consume-once funnel: whichever arrives first wins)       │                       │
+     │                                  │                           │                       │
+     │ 5. verify state, then exchange the code:                     │                       │
+     ├────────────── POST token: code + PKCE verifier ──────────────▶                       │
+     ◀────────── access_token + refresh_token + id_token ───────────┤                       │
+     │    verify ID-token nonce         │                           │                       │
+     │                                  │                           │                       │
+     ├─────────────── 6. persist StoredTokens (single atomic Keychain item) ────────────────▶
+     │                                  │                           │                       │
+     ├─────────── 7. GET userinfo (Bearer access_token) ────────────▶                       │
+     ◀───────── sub, name, email, email_verified, picture ──────────┤                       │
+     │                                  │                           │                       │
+     │ 8. status = .signedIn — identity published to the UI         │                       │
+```
+
+**0. 配置。** `OIDCClientConfiguration.current` 在启动时从应用 bundle 的 Info.plist 读取签发方 URL 和 client ID，把空字符串、未展开的 `$(VAR)` 引用和 `YOUR_..._HERE` 哨兵值一律视为未配置（回退到惰性占位符）。
+
+**1. 发现。** `signIn(using:)` 首先获取 `{issuer}/.well-known/openid-configuration`，解码出的端点在本次启动内缓存。
+
+**2. 单次尝试的随机值。** `beginAuthorization()` 用 `SecRandomCopyBytes` 生成三个 32 字节随机值（base64url 编码）：PKCE 对、`state`、`nonce`，连同端点一起存入 `pendingAuthorization`——这样**任何**返回路径都能完成流程，而不只是发起流程的那条代码路径。
+
+**3. 浏览器环节。** 组装 authorize URL：
+
+```text
+{authorization_endpoint}?response_type=code&client_id=example-desktop
+    &redirect_uri=com.example.app:/oauth2redirect
+    &scope=openid profile email offline_access
+    &state=…&nonce=…&code_challenge=…&code_challenge_method=S256
+```
+
+并交给 `webSession.authenticate(using:callback:.customScheme(…))`。
+
+**4. 返回——两条路径，一个汇聚点。** 这是多数实现最容易漏掉的部分，我们也是上线自测时才发现缺了半边：
+
+- **4a. 弹窗路径：** `ASWebAuthenticationSession` 自己截获重定向，把回调 URL 作为 `authenticate` 的返回值给出。
+- **4b. 深链接路径：** 当登录在**外部浏览器**中完成时（很常见：用户默认浏览器里已有 IdP 会话，或者用户把登录页拖进了完整浏览器），重定向改由 **Launch Services** 送达。这要求 scheme 已注册在 `CFBundleURLTypes` 中，且 App 入口的 `onOpenURL` 把该 scheme 路由到 `AuthSession.handleAuthorizationCallback(_:)`；后者先校验 URL 与注册的重定向 URI 一致才继续。
+
+两条路径都汇入同一个「消费一次即作废」的完成函数（对 `pendingAuthorization` 先取后清；一切都在 MainActor 上串行，因此无竞态）。谁先到谁生效；重复或重放的回调是 no-op。用户关掉登录弹窗时会保留 `pendingAuthorization`——为了在外部浏览器里继续完成登录，关弹窗不能杀掉流程。
+
+**5. 校验与换码。** 完成函数先检查回调中的 `error` 参数，再校验 `state` 相等，然后向 token 端点 POST `grant_type=authorization_code`，附上授权码、原始 PKCE verifier、client ID 和重定向 URI（form 编码；没有 client secret）。ID token 的 `nonce` claim 必须与存储值一致。成功后持久化并发布 token 集合，随即拉取 userinfo（§6）。
+
+> ID token 是**不验签**解码的，这是有意为之：它只用于展示，而 nonce 绑定加上到已发现签发方的 TLS 已覆盖这种客户端用途。授权始终以 access token 为准，由服务端用 IdP 的 JWKS 验证。如果某个依赖方要用 ID token 的 claims 做*授权*决策，就必须做完整的 JWS 验签。
+
+---
+
+## 6. 会话生命周期与 token 管理
+
+- **内存中：** `AuthSession` 是 `@Observable @MainActor`，在 App 入口创建一次并注入环境。`status`（`signedOut / signingIn / signedIn / error`）直接驱动 UI。
+- **磁盘上：** 整个 token 集合是一条 Keychain generic-password 条目里的单个 JSON blob（如 `service: com.example.app.oidc`），因此每次保存都是原子的——不存在写一半的状态。
+- **恢复：** `restoreSession()` 在初始化时从 Keychain 复水，不发网络请求。access token 已过期也照样恢复为已登录——首次使用时再刷新。
+- **消费：** 包外任何代码都不接触 token。API 客户端拿到的是环境值 `accessTokenProvider`（由 `AuthSession` 实现的 `AccessTokenProviding`），每次请求调用 `accessToken()`。
+- **惰性续期，没有定时器。** 每次 `accessToken()` 调用都以 60 秒时钟偏差余量检查过期；过期则先执行 `refresh_token` grant。并发调用会去重为一个进行中的刷新任务。
+- **轮换（rotation）。** 概念上：公共客户端的 refresh token 没有 secret 与之绑定，泄漏风险天然更高，所以现代 IdP（OAuth 2.1 草案也如此推荐）让每个 refresh token **只能用一次**——每次刷新都签发新的 refresh token，旧的作废；一旦新旧同时被使用，IdP 即可判定泄漏并吊销整条授权链。客户端的正确姿势是：刷新响应携带新 refresh token 时采用新值，缺省时保留旧值——对轮换和不轮换的 IdP 都正确。
+- **失败语义：** 刷新 grant 返回 HTTP 400/401 意味着 `invalid_grant`——refresh token 已死，会话被完全遗忘（清空 Keychain，状态 → 已登出）。瞬时网络失败会抛错但*保留*会话。实际效果：用户跨重启无限期保持登录，直到 IdP 吊销 / 过期 refresh token，届时应用干净地退回登出态而不是报错。
+- **登出：** 尽力而为地向 revocation 端点（RFC 7009）POST refresh token，然后本地清除。只有本次启动内已完成发现时才尝试吊销——登出绝不能被不可达的签发方阻塞。
+
+### 用户身份：ID token 与 userinfo 的区别
+
+一个业界很常见、但容易踩空的事实：**不少 IdP 的 ID token 只携带协议 claims**（`sub`、`iss`、`aud`、`iat`、`exp`、`auth_time`、`nonce`、`at_hash`），从不包含 `name` / `email` / `picture`。以开源的 better-auth 为例，其 profile-claim 映射器只被 userinfo 端点这一处调用——这一点既有实证（解码线上真实 token），也能在源码中确认。
+
+因此用户资料应来自 `GET {userinfo_endpoint}` + Bearer access token，按 scope 授予：`sub`（openid）、`name` / `picture` / `given_name` / `family_name`（profile）、`email` / `email_verified`（email）。实现上，`AuthSession.loadUserInfo()` 在每次登录后和 Keychain 恢复后自动执行；它是尽力而为的——失败只记日志并保留现有身份，绝不影响 `status`。**教训：永远不要假设 ID token 里有资料 claims；userinfo 端点才是可靠来源。**
+
+---
+
+## 7. 配置交付与 Info.plist 陷阱
+
+运行时配置的旅程：gitignore 的 `Local.xcconfig`（`OIDC_ISSUER_URL`、`OIDC_CLIENT_ID` 构建设置）→ Info.plist 占位符 `$(OIDC_ISSUER_URL)` → 启动时 `Bundle.main` 读取。有两种*看起来*能交付自定义 plist 键的机制实际上悄无声息地失效（我们两者都踩了）：
+
+1. **`INFOPLIST_KEY_<自定义名>` 构建设置会被静默丢弃。** Xcode 只对自己已知键列表认可 `INFOPLIST_KEY_` 前缀，自定义键名直接被忽略，没有任何警告。
+2. **构建后的 PlistBuddy 脚本阶段会输给构建系统的调度。** 由于没有声明 inputs/outputs，`ProcessInfoPlistFile` 每次构建都被安排在注入脚本*之后*运行，重新生成 plist 并抹掉注入的键——而且脚本的修改会把 plist 任务重新标脏，于是每次构建都重演一遍（不收敛）。
+
+**修复——唯一的一等公民机制：** 把自定义键写进 Info.plist 模板本身（xcodegen 项目就是 `project.yml` 的 `info:` 块），值为字面量占位符 `$(OIDC_ISSUER_URL)`；`ProcessInfoPlistFile` 自己会在构建时用构建设置展开它们。单一生产者，没有竞争。同一处还可以声明式注册深链接返回所需的 URL scheme（`CFBundleURLTypes`）。xcodegen 项目修改 `project.yml` 后要重新运行 `xcodegen`，并让 CI 对生成文件做漂移检查。
+
+发布提示：发布构建可以有意不带 OIDC 配置（占位符会让登录明确失败），等生产签发方注册就绪后，再在 CI 的构建配置注入真实值。
+
+---
+
+## 8. 什么是秘密，什么不是
+
+| 项目 | 是秘密吗 | 存放位置 |
+| --- | --- | --- |
+| 签发方 URL | 否——发现文档本来就公开可取 | 每个发布应用的 Info.plist |
+| Client ID | 否——公共 PKCE 客户端，*根本不存在 client secret* | Info.plist |
+| 重定向 URI | 否——但受服务端注册管控 | 编译期常量 |
+| Access / refresh / ID token | **是** | 仅 Keychain，绝不进日志 |
+| 崩溃上报、埋点等第三方 SDK 的 key | 是（有滥用风险） | gitignore 的 xcconfig / CI secrets |
+
+公共客户端的安全性建立在 PKCE + `state` + `nonce` + 服务端重定向 URI 注册之上——不靠隐藏标识符。日志中对用户标识符做掩码（os_log 的 `privacy: .private(mask: .hash)`）。
+
+---
+
+## 9. 测试
+
+所有会话逻辑都在单元测试覆盖之下，靠的是 §3 第 5 条的接缝——单元测试不碰网络、Keychain 和浏览器：
+
+- **PKCE / URL 构造 / 配置解析：** 纯函数测试（S256 向量、哨兵值处理）。
+- **网络客户端：** 把响应解码、form 编码等拆成静态辅助函数直接单测。
+- **`AuthSession`：** 用 fake 的 `OIDCProviding` 和内存版 `TokenStoring`，经 `beginAuthorization()` / `completeSignIn(...)` 驱动——覆盖恢复、惰性刷新、刷新去重、轮换合并、`invalid_grant` 拆除会话、登出吊销。
+- **深链接路径：** 覆盖五种情况——正常路径、外来 URL 拒绝、过期回调、state 不匹配、重复送达。
+- **Keychain 存储：** 用测试专属 service 名对真实 Keychain 做集成测试。
+
+无需 IdP 的手动冒烟测试：应用运行时执行 `open "com.example.app:/oauth2redirect?code=x&state=y"`，日志应出现「无进行中的登录，忽略回调」一类的信息——不触碰认证状态即可证明 scheme 注册与路由无误。
+
+---
+
+## 10. 实战调试记录
+
+每一条都耗费了真实时间，且没有一条是认证代码的 bug：
+
+- **TLS -9816 是烟雾弹。** 在 fake-ip 代理下（如 Surge：TUN + 本地 HTTP 代理、`198.18.0.0/15` DNS 应答），*不可达或不存在的主机*会表现为「TLS 错误导致安全连接失败」，而不是干净的 DNS 失败——隧道先被接受，然后在握手中途死掉。我先后两次撞上：一次是应用打到了 `.invalid` 占位符（配置从未送达，见 §7）；一次是新注册域名的 DNS 传播窗口期。后者刷新代理的 DNS 缓存或加一条固定分流规则即可解决。
+- **要检查构建产物里的 plist，而不是构建设置。** xcconfig 的值作为构建设置一直解析正确，缺的只是构建出的应用 Info.plist。当配置「没生效」时，直接查看 `DerivedData/.../YourApp.app/Contents/Info.plist`。
+- **调试器下的旧二进制。** 重新构建后，调试器持有的进程仍是改动前的二进制——先退出再重启才能复测。
+- **zsh 的 `log` 内建命令。** 在 zsh 中 `log` 是 shell 内建，`log show` / `log stream` 会静默失效——要用 `/usr/bin/log`，且优先 `log stream`（info 级消息不会被保留给事后的 `log show` 查询）。
+- **代码生成型项目：** 手动新增的文件必须重新运行生成器（如 `xcodegen`）才会参与构建。
+
+---
+
+## 11. 实现检查清单
+
+1. 确认 IdP 支持 Authorization Code + PKCE（S256）并提供 `/.well-known/openid-configuration`；用精确的自定义 scheme 重定向 URI 注册公共客户端。
+2. 定义配置面：issuer + client ID 构建期注入（Info.plist 模板占位符 → xcconfig）；重定向 URI 与 scope 作为编译常量；未配置时回退到 `.invalid` 惰性占位符。
+3. 在 `CFBundleURLTypes` 中注册重定向 scheme。
+4. 在接缝后面构建协议层：发现、换码、刷新、吊销、userinfo——全部是 URLSession 上的 form 编码 POST / Bearer GET。
+5. PKCE：32 字节 CSPRNG verifier、S256 challenge，外加每次尝试独立的 `state` 和 `nonce`。
+6. 用可观察的主线程会话对象编排：pending-authorization 上下文、**两条**返回路径（web-auth 结果*和*深链接）汇入消费一次即作废的完成函数、`state` / `nonce` 校验、原子化 Keychain 持久化。
+7. 带过期余量的惰性刷新、单飞去重、感知轮换的合并、`invalid_grant` → 彻底登出、瞬时错误 → 保留会话。
+8. 用户身份从 **userinfo** 获取，而不是 ID token 的 claims；登录后和恢复后各执行一次，尽力而为。
+9. 登出：尽力而为的吊销、绝不阻塞；然后本地清除。
+10. 针对接缝和深链接边界情况写测试；用 `open "<scheme>:/<path>?code=x&state=y"` 冒烟测试 scheme 路由。
+
+---
+
+## 12. 参考资料
+
+- RFC 6749 — The OAuth 2.0 Authorization Framework
+- RFC 7636 — Proof Key for Code Exchange（PKCE）
+- RFC 8252 — OAuth 2.0 for Native Apps（BCP 212）
+- RFC 7009 — OAuth 2.0 Token Revocation
+- OpenID Connect Core 1.0 / Discovery 1.0
+- OAuth 2.1 草案（draft-ietf-oauth-v2-1）
+- Apple：`ASWebAuthenticationSession`、SwiftUI `WebAuthenticationSession`、Keychain Services
