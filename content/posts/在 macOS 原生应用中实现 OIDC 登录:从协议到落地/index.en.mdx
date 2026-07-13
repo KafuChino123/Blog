@@ -1,0 +1,419 @@
+# Implement OIDC login in macOS native applications: from protocol to landing
+
+Recently, I realized the complete OIDC login from scratch in a macOS desktop application: Authorization Code + PKCE, system browser authorization, Keychain persistence, token inertial refresh and rotation, userinfo user information - no third-party authentication library was introduced in the whole process, only the components that came with the Apple platform were used. This article organizes this implementation into a general engineering guide: protocol background, design decision-making and its reasons, end-to-end process, built-on system and debugging traps, and a checklist that can be followed directly.
+
+The architecture and code structure in the article come from the real project, but all identifiers have been generalized: the URL scheme of the application is written as `com.example.app`, the issuer is written as `https://auth.example.com`, and the authentication package is written as `AuthKit`.
+
+---
+
+##1. What do you want to achieve?
+
+**Goal:** Let users log in to your platform account in the desktop application, restart across applications to maintain the login status, and provide a valid Bearer token to any API client in the application on demand.
+
+**Final form:** Complete the Authorization Code + PKCE process through the system browser, the token persists in Keychain, refreshes latly and supports refresh token rotation, obtains user information (nickname, mailbox, avatar) through the userinfo endpoint, and the login status drives all UI in the form of an observable object.
+
+---
+
+## two Background of the agreement
+
+### 2.0 Terminology Quick Check
+
+| Terminology | Meaning |
+
+|---|---|
+
+| **OP / IdP** (OpenID Provider / Identity Provider) | The server responsible for authenticating users and issuing tokens, that is, "login server" |
+
+| **RP** (Relying Party) | Applications that rely on IdP to complete the login - Desktop applications in this article |
+
+| **Claim** | An assertion about the user in token or userinfo, such as `sub` (user ID), `email` |
+
+| **Scope** | The scope of authority applied by the client, decide what claims to get, such as `openid profile email` |
+
+| **public client** (public client) | Clients that cannot keep secrets (native applications, SPA); in contrast, **secret clients** can save client secret on the server |
+
+One sentence distinguishes between two protocols: OAuth 2.0 solves **authorization** ("what this application can do for users"), and OIDC adds a layer of ** authentication** ("who is the current user") - OIDC reuses the entire process of OAuth, and additionally introduces ID token and userinfo endpoints to carry identity information.
+
+### 2.1 Which OAuth process to choose and why
+
+For **native desktop applications**, the correct process is:
+
+**Authorization Code + PKCE, through the system browser, does not use client secret. **
+
+Based on OAuth 2.0 for Native Apps (RFC 8252, Best Current Practice):
+
+- The native application is **public client**: anything compiled into binary can be extracted, so client secret does not provide any security and should not be used.
+
+- Login must take place in **external user agent** (browser), not embedded WebView. The application can never access the user password. The browser's existing session / SSO / passkey can be reused, and IdP can also trust the context.
+
+- Since there is no secret, the authorization code alone is equivalent to holding a certificate, which can be intercepted and stolen - **PKCE** (RFC 7636) is to plug this hole (see §2.2).
+
+- Call back **private URI scheme** (or declarative HTTPS universal link) to return to the application; the scheme should be registered with the operating system and registered on the IdP side.
+
+All kinds of historical alternatives are wrong in this scenario: the implicit process will leak the token in the URL and has been abandoned; the password mode allows the application to get the user password directly; the device-code process is aimed at restricted devices. It is worth mentioning that these practices are being absorbed into the OAuth 2.1 draft: PKCE has become a mandatory requirement for all clients, and the implicit and password modes are directly removed - implemented in this article, it is already in the direction of protocol evolution.
+
+### 2.2 Three random values attempted each time you log in
+
+Each login attempt will generate three independent random values, each of which defends against a type of attack:
+
+| Value | Transmission Path | Verification Party | Defense Attack |
+
+| --- | --- | --- | --- |
+
+| **PKCE verifier / challenge** | challenge (`base64url(SHA256(verifier))`) put into authorize URL; the original verifier is only sent directly to the token endpoint at the end | IdP checks when changing the code | **Authorization code intercepted**: The verifier can't be taken out even if the authorization code is stolen, and the code itself is useless (RFC 7636, S256) |
+
+| **state** | Enter the browser with authorize URL and return as it is with the callback | The client checks when callback | **CSRF / callback injection**: All callbacks that do not match `state` and the current login attempt are rejected |
+
+| **nonce** | authorize URL → ID token written by IdP | The client checks after code change | **ID token replay**: bind the issued ID token to this attempt |
+
+### 2.3 Discovery Document (Discovery)
+
+Only the issuer's URL needs to be configured. Everything else - authorization, token, userinfo, revocation endpoint and supported algorithms - comes from the discovery document of `{issuer}/.well-known/openid-configuration` (OIDC Discovery 1.0). This allows the configuration surface to converge to two values, and IdP can also evolve the endpoint freely.
+
+### 2.4 Three kinds of token
+
+| Token | Use | Typical Life Cycle | Usage Location |
+
+| --- | --- | --- | --- |
+
+| **Access token** | Call the Bearer certificate of the API (the common form is the JWT that can be verified by JWKS of IdP) | Short (such as 3600 seconds) | Platform call and userinfo's `Authorization: Bearer ...` |
+
+| **Refresh token** | No re-login to exchange for a new access token (`offline_access` scope) | Long-term validity, many IdP **Rotate every time you use it** | Token only endpoint |
+
+| **ID token** | Login certificate with user claims, with signature | Single exchange | nonce verification + minimum display bottom |
+
+---
+
+## three. Design decision-making
+
+The following are the key make-ups and reasons before realizing:
+
+1. **Handwritten realization, no AppAuth is used. ** The factual standard library AppAuth-iOS has an unrepaired Swift 6 macOS crash (issue #881), and the project agreement should try not to introduce third-party dependencies. The components of the Apple platform - `WebAuthenticationSession` (SwiftUI async package of `ASWebAuthenticationSession`), SHA-256 of CryptoKit, `SecRandomCopyBytes`, URLSession, Keychain - have covered all the requirements; the amount of protocol code on it is small and fully measurable. Async web-auth API requires macOS 15 or more.
+
+2. **There are only two configuration values** (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`), injected by gitignore's `Local.xcconfig` → Info.plist (see §7). The rest of the endpoints are all from the discovery document.
+
+3. **Redirect URI and scope compile into constants. ** `com.example.app:/oauth2redirect` and `openid profile email offline_access` are "facts about this application" and have been registered on the IdP side. They should not change with the environment, so they are used as constants. Modification of redirection URI requires server-side collaborative re-registration: a "soft one-way door".
+
+4. **Use lazy placeholders when not configured. ** When the issuer is not configured, the configuration will go back to `https://auth.example.invalid`——`.invalid` is RFC 2606 reserved TLD, and the login will fail quickly and clearly instead of hitting a real host.
+
+Five. ** Protocol seams for testing. ** `OIDCProviding` (network) and `TokenStoring` (persistence) are protocols, which are implemented by fake in the test; the consumer only relies on the seam of `AccessTokenProviding`. `beginAuthorization()` / `completeSignIn(...) ` Removed from `signIn(using:)`, because `WebAuthenticationSession` cannot be constructed in the test.
+
+6. **Develop IdP scheme locally. ** The open source Dex can be used as a stand-in with a static public client; note that Dex will reject the custom scheme redirect URI that is not explicitly listed, such as:
+
+```yaml
+
+Static clients:
+
+-Id: example-desktop
+
+Name: Example Desktop
+
+Public: true
+
+redirectURIs:
+
+-Com.example.app:/oauth2redirect
+
+```
+
+---
+
+## four. Module structure
+
+Everything in the protocol layer is placed in a separate SwiftPM package (recorded as `AuthKit`):
+
+```text
+
+AuthKit/
+
+├── Configuration/OIDCClientConfiguration.swift # Read issuer/clientID from Info.plist; redirect URI, scope, placeholder
+
+├── PKCE/PKCE.swift # CSPRNG Random Value + S256 challenge (CryptoKit)
+
+├── Protocol/
+
+│ ├── OIDCClient.swift # URLSession Implementation of OIDCProviding
+
+│ ├── OIDCProviding.swift # discover / exchangeCode / refresh / revoke / userInfo
+
+│ ├── OIDCEndpoints.swift # Decoded Discovered Documents
+
+│ ├── OIDCAuthorizationURLBuilder.swift # Construct authorize URL
+
+│ ├── TokenResponse.swift, IDTokenClaims.swift, OIDCUserInfo.swift, OIDCERrror.swift
+
+├── Session/
+
+│ ├── AuthSession.swift # @Observable @MainActor State Machine; Restore, Refresh, Log Out
+
+│ ├── AuthSession+SignIn.swift # Browser link, deep link callback, code change
+
+│ ├── AuthStatus.swift, AccessTokenProviding.swift
+
+├── Storage/
+
+│ ├── KeychainTokenStore.swift # single atom generic-password entry
+
+│ └── StoredTokens.swift, TokenStoring.swift, KeychainError.swift
+
+└── Support/Base64URL.swift
+
+```
+
+There is only a thin layer of integration on the application side: the App entrance creates `AuthSession` and injects the SwiftUI environment, deep link routing, plus the account setting page and other UI.
+
+The actual order of implementation is also worth referring to, and each step can be submitted and verified independently:
+
+1. Build package skeleton: configuration, PKCE, protocol type;
+
+2. OIDC network client + Keychain token storage;
+
+3. `AuthSession` arrangement + `AccessTokenProviding` seam;
+
+4. Access the application, and the configuration is injected by xcconfig;
+
+Five. A minimum setting page that can click "Login/Logout" for end-to-end verification;
+
+6. Fix configuration delivery (Info.plist trap, see §7);
+
+Seven. Complete the deep link OAuth callback (see §5 step 4b);
+
+8. Fill in the user identity from the userinfo endpoint (see §6);
+
+Nine. Account UI polishing.
+
+---
+
+## five. The whole process of logging in
+
+```text
+
+AuthSession System browser IdP (auth.example.com) Keychain
+
+││││
+
+├────── 1. GET {issuer}/.well-known/openid-configuration ──────▶│
+
+◀─────────── endpoints (cached for this launch) ───────────┤ │
+
+││││
+
+│ 2. generate PKCE verifier + S256 challenge, state, nonce │ │
+
+│ → record pendingAuthorization │ │ │
+
+││││
+
+├───── 3. open authorize URL ──────▶ │ │
+
+│ │ user signs in (password / SSO / passkey) │
+
+│├────── authenticate ───────▶ │
+
+│◀──── 302...? Code&state ─────┤│
+
+││││
+
+│ 4. the callback URL arrives by one of two paths: │ │
+
+◀─── 4a. authenticate() result ────┤ │ │
+
+◀─4b. Launch Services deep link ──┤ │ │
+
+│ (consume-once funnel: whichever arrives first wins) │ │
+
+││││
+
+│5. verify state, then exchange the code: │ │
+
+├──────────── POST token: code + PKCE verifier ──────────────▶ │
+
+◀────────── access_token + refresh_token + id_token ───────────┤ │
+
+│ verify ID-token nonce │ │ │
+
+││││
+
+├────────────── 6. persist StoredTokens (single atomic Keychain item) ────────────────▶
+
+││││
+
+├────────── 7. GET userinfo (Bearer access_token) ──────────▶ │
+
+◀───────── sub, name, email, email_verified, picture ──────────┤ │
+
+││││
+
+│8. status = .signedIn — identity published to the UI │ │
+
+```
+
+**0. Configuration. ** `OIDCClientConfiguration.current` reads the issuer URL and client ID from the Info.plist of the application bundle at startup, and refers to empty strings, unexpanded `$(VAR)` references and `YOUR_... _HERE` sentry values are all considered unconfigured (revert to inert placeholders).
+
+**One. Discover. ** `signIn(using:)` First get `{issuer}/.well-known/openid-configuration`, and the decoded endpoint is cached in this startup.
+
+**Two. Random value of a single attempt. ** `beginAuthorization()` generates three 32-byte random values (base64url encoding) with `SecRandomCopyBytes`: PKCE pair, `state`, `nonce`, and deposit `pendingAuthorization` together with the endpoint - so that **any** return path can complete the process, not just the code path that initiates the process.
+
+**Three. Browser link. ** Assemble authorize URL:
+
+```text
+
+{Authorization_endpoint}? Response_type=code&client_id=example-desktop
+
+&Redirect_uri=com.example.app:/oauth2redirect
+
+&Scope=openid profile email offline_access
+
+&state=...&nonce=...&code_challenge=...&code_challenge_method=S256
+
+```
+
+And give it to `webSession.authenticate(using:callback:.customScheme(...))`.
+
+**Four. Return - two paths, one convergence point. ** This is the most easily missed part of most implementations, and we also found that half of it was missing when we went online self-test:
+
+-**4a. Pop-up window path: ** `ASWebAuthenticationSession` intercepts the redirection by itself, and gives the callback URL as the return value of `authenticate`.
+
+-**4b. Deep link path: ** When the login is completed in **external browser** (very common: the user already has an IdP session in the default browser, or the user drags the login page into the full browser), the redirection is delivered by **Launch Services**. This requires that the scheme has been registered in `CFBundleURLTypes`, and the `onOpenURL` of the App entrance routes the scheme to `AuthSession.handleAuthorizationCallback(_:)`; the latter first checks that the URL is consistent with the registered redirection URI before continuing.
+
+Both paths are integrated into the same completion function of "one consumption is invalid" (take and then clear `pendingAuthorization`; everything is serialized on MainActor, so there is no competition). Whoever arrives first takes effect; repeated or replayed callbacks are no-op. When the user closes the login pop-up window, it will keep `pendingAuthorization` - in order to continue to complete the login in the external browser, closing the pop-up window cannot kill the process.
+
+**Five. Check and change the code. ** Complete the function to check the `error` parameter in the callback first, then check the `state` equality, and then POST `grant_type=authorization_code` to the token endpoint, attaching the authorization code, the original PKCE verifier, client ID and redirect URI (form encoding; no client secret). The `nonce` claim of ID token must be consistent with the storage value. After success, it will persist and release the token collection, and then pull userinfo (§6).
+
+> ID token is decoded without verification**, which is intentional: it is only used for display, and the TLS of the nonce binding added to the issuer has been found to have covered this client purpose. Authorization is always subject to access token and verified by the JWKS of IdP by the server. If a dependent party wants to use the claims of ID token to make *authorization* decisions, it must do a complete JWS verification.
+
+---
+
+## six Session life cycle and token management
+
+- **In memory:** `AuthSession` is `@Observable @MainActor`, which is created once at the App entrance and injected into the environment. `status` (`signedOut / signingIn / signedIn / error`) directly drives the UI.
+
+- **On the disk:** The entire token collection is a single JSON blob in a Keychain generic-password entry (such as `service: com.example.app.oidc`), so every time it is saved, it is atomic - there is no state of writing half.
+
+- **Restore: ** `restoreSession()` is restored from Keychain at the time of initialization without sending a network request. If the access token has expired, it will still be restored to logged in - refresh it when you use it for the first time.
+
+- **Consumption:** Any code outside the package does not touch token. The API client gets the environment value `accessTokenProvider` (`AccessTokenProviding` implemented by `AuthSession`), and calls `accessToken()` every time the request.
+
+- **Inert renewal, no timer. ** Each `accessToken()` call is checked for expiration with a 60-second clock deviation margin; if it expires, execute `refresh_token` grant first. The combit call will be re-re-refreshed task in progress.
+
+- **Rotation. ** Conceptually: the refresh token of the public client is not bound with secret, and the risk of leakage is naturally higher. Therefore, modern IdP (also recommended by the OAuth 2.1 draft) allows each refresh token ** to be used only once ** - a new refresh token is issued every time, and the old one is invalidated; once the old and new are used at the same time, IdP can determine the leakage and revoke the entire authorization chain. The correct posture of the client is: use a new value when refreshing the response to carry a new refresh token, and keep the old value when defaulting - correct for both rotating and non-retating IdP.
+
+- **Failure semantics: ** Refresh grant returns HTTP 400/401 means `invalid_grant` - refresh token is dead and the session is completely forgotten (empty Keychain, status → logged out). Instantaneous network failure will throw an error but *retain* the session. Actual effect: The user will stay logged in indefinitely until the IdP cancels / expires refresh token, at which time the application will return to the logout state cleanly instead of reporting an error.
+
+- **Decome:** Try your best to POST refresh token to the revocation endpoint (RFC 7009), and then clear it locally. Only try to revoke it when the discovery has been completed in this launch - the cancellation must not be blocked by an unreachable issuer.
+
+### User identity: the difference between ID token and userinfo
+
+A common but easy-to-step fact in the industry: **Many IdP's ID tokens only carry protocol claims** (`sub`, `iss`, `aud`, `iat`, `exp`, `auth_time`, `nonce`, `at_hash`), and never contain `name` / `email` / `picture`. Take the open source better-auth as an example, its profile-claim mapper is only called by the userinfo endpoint - this is not only empirical (decoding the real token on the line), but also confirmed in the source code.
+
+Therefore, user information should come from `GET {userinfo_endpoint}` + Bearer access token, granted according to scope: `sub` (openid), `name` / `picture` / `given_name` / `family_name` (profile), `email` / `email_verified` (email). In terms of implementation, `AuthSession.loadUserInfo()` is automatically executed after each login and Keychain recovery; it is done as hard as possible - failure only records the log and retains the existing identity, and never affects `status`. **Lesson: Never assume that there is information claims in the ID token; the userinfo endpoint is a reliable source. **
+
+---
+
+## seven. Configuration delivery and Info.plist trap
+
+The journey of runtime configuration: gitignore's `Local.xcconfig` (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID` build settings) → Info.plist placeholder `$(OIDC_ISSUER_URL)` → `Bundle.main` read at startup. There are two mechanisms that *look* to deliver custom plist keys but actually fail silently (we stepped on both):
+
+1. **`INFOPLIST_KEY_<Custom Name>` Build settings will be silently discarded. ** Xcode only recognizes the `INFOPLIST_KEY_` prefix for its own list of known keys, and the custom key name is directly ignored without any warning.
+
+2. ** The PlistBuddy script stage after construction will lose to the scheduling of the construction system. ** Because inputs/outputs are not declared, `ProcessInfoPlistFile` is scheduled to run every time it is built after injecting the script *, regenerating plist and erasing the injected keys - and the modification of the script will re-mark the plist task, so it is repeated every time it is built (not convergent).
+
+**Fix - the only first-class citizen mechanism:** Write the custom key into the Info.plist template itself (the xcodegen project is the `info:` block of `project.yml`), and the value is the literal placeholder `$(OIDC_ISSUER_URL)`; `ProcessInfoPlistFile` will expand them with the build settings when building. Single producer, no competition. In the same place, you can also declare a deep link to return the required URL scheme (`CFBundleURLTypes`). After the xcodegen project modifies `project.yml`, re-run `xcodegen` and let CI do a drift check on the generated file.
+
+Release Tips: The release build can be intentionally without OIDC configuration (placeholders will make the login clear and fail). After the production issuer is ready to register, inject the real value into the construction configuration of CI.
+
+---
+
+## eight. What is a secret and what is not
+
+| Project | Is it a secret? | Storage location |
+
+| --- | --- | --- |
+
+| Issuer URL | No - It is found that the document is already public and deserable | Info.plist of each published application |
+
+| Client ID | No - Public PKCE client, *there is no client secret at all* | Info.plist |
+
+| Redirect URI | No - but subject to server registration control | Compilation period constant |
+
+| Access / refresh / ID token | **Yes** | Keychain only, never log |
+
+| The key of third-party SDK such as crash reporting and burying points | Yes (risk of abuse) | gitignore's xcconfig / CI secrets |
+
+The security of the public client is based on PKCE + `state` + `nonce` + server redirection URI registration - without hiding identifiers. Make a mask for the user identifier in the log (os_log's `privacy: .private(mask: .hash)`).
+
+---
+
+## nine. Test
+
+All conversational logic is covered by unit tests, relying on the seam of Article 5 of §3 - unit tests do not touch the network, Keychain and browser:
+
+- **PKCE / URL construction / configuration analysis: ** Pure function test (S256 vector, sentry value processing).
+
+- **Network client:** Disassemble response decoding, form encoding, etc. into static auxiliary functions for direct single testing.
+
+- **`AuthSession`:** Use fake `OIDCProviding` and memory version `TokenStoring`, through `beginAuthorization()` / `completeSignIn(...) `Drive - overlay recovery, inertial refresh, refresh removal, rotation and merge, `invalid_grant` dismantling the session, cancellation and cancellation.
+
+- **Deep link path:** Covers five situations - normal path, foreign URL rejection, expired callback, state mismatch, repeated delivery.
+
+- **Keychain storage:** Use the exclusive service name to test the real Keychain for integration.
+
+Manual smoke test without IdP: Runtime execution `open "com.example.app:/oauth2redirect? Code=x&state=y"`, messages such as "no ongoing login, ignore callback" should appear in the log - without touching the authentication status can prove that the scheme registration and routing are correct.
+
+---
+
+## ten. Actual combat debugging record
+
+Each one consumes real time, and no one is a bug of the authentication code:
+
+- **TLS -9816 is a smoke bomb. ** Under the fake-ip proxy (such as Surge: TUN + local HTTP proxy, `198.18.0.0/15` DNS response), *unreachable or non-existent hosts* will be expressed as "TLS errors lead to secure connection failure", not a clean DNS failure - the tunnel is accepted first, and then dies in the middle of the handshake. I bumped into it twice: once the application hit the `.invalid` placeholder (the configuration was never delivered, see §7); the other was the DNS propagation window period of the newly registered domain name. The latter can be solved by refreshing the agent's DNS cache or adding a fixed shunt rule.
+
+- **Check the plist in the build product, not the build settings. ** The value of xcconfig has always been parsed correctly as the construction setting, and the only thing missing is the constructed application Info.plist. When the configuration is "not effective", check `DerivedData/... directly. /YourApp.app/Contents/Info.plist`.
+
+- **Old binary under the debugger. ** After reconstruction, the process held by the debugger is still binary before the change - exit first and then restart to retest.
+
+- **zsh's `log` built-in command. ** In zsh, `log` is built-in shell, and `log show` / `log stream` will be silently invalidated - use `/usr/bin/log`, and give priority to `log stream` (info-level messages will not be kept for subsequent `log show` queries).
+
+- **Code generation project:** Manually added files must re-run the generator (such as `xcodegen`) to participate in the construction.
+
+---
+
+## eleven Realize the checklist
+
+1. Confirm that IdP supports Authorization Code + PKCE (S256) and provides `/.well-known/openid-configuration`; use precise custom scheme to redirect URI to register the public client.
+
+2. Define the configuration surface: issuer + client ID build period injection (Info.plist template placeholder → xcconfig); redirect URI and scope as compilation constants; back to `.invalid` lazy placeholder when not configured.
+
+3. Register the redirection scheme in `CFBundleURLTypes`.
+
+4. Build the protocol layer behind the seam: discover, change code, refresh, cancel, userinfo - all form coding POST / Bearer GET on URLSession.
+
+Five. PKCE: 32-byte CSPRNG verifier, S256 challenge, plus independent `state` and `nonce` each time you try.
+
+6. Arrange with observable main thread session objects: pending-authorization context, **two** return paths (web-auth results * and *deep links) to input the completion function that is invalidated once consumed, `state` / `nonce' Keychain verification, atomization persistence.
+
+Seven. Inertial refresh with expired margin, single-flying, perceptual rotation merger, `invalid_grant` → complete logout, instantaneous error → retention session.
+
+8. The user identity is obtained from **userinfo**, not the claims of ID token; do it once after logging in and once after recovery, and try your best.
+
+Nine. Cancel: try your best to cancel and never block; and then remove it locally.
+
+10. Write a test for seams and deep link boundaries; use `open "<scheme>:/<path>? Code=x&state=y"` Smoke test scheme routing.
+
+---
+
+##12. Reference material
+
+- RFC 6749 — The OAuth 2.0 Authorization Framework
+
+- RFC 7636 — Proof Key for Code Exchange (PKCE)
+
+- RFC 8252 - OAuth 2.0 for Native Apps (BCP 212)
+
+- RFC 7009 — OAuth 2.0 Token Revocation
+
+- OpenID Connect Core 1.0 / Discovery 1.0
+
+- OAuth 2.1 draft (draft-ietf-oauth-v2-1)
+
+- Apple: `ASWebAuthenticationSession`, SwiftUI `WebAuthenticationSession`, Keychain Services
